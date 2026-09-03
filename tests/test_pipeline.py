@@ -387,3 +387,32 @@ class FreeProviderTests(unittest.TestCase):
         judge = LLMJudge(LLMConfig(enabled=True, provider="auto"))
         self.assertFalse(judge.available)
         self.assertIn("no LLM credentials", judge.disabled_reason)
+
+
+class ModelRetirementTests(unittest.TestCase):
+    def test_follows_provider_model_hint(self):
+        from hwintern.judge import LLMJudge, LLMConfig, _suggested_model
+        from hwintern.models import Job
+        self.assertEqual(_suggested_model('This model models/gemini-2.5-flash is no longer available to new users. '
+                                          'Please update your code to use models/gemini-3.6-flash for the latest features'),
+                         "gemini-3.6-flash")
+        seen = []
+
+        class Sess:
+            def post(self, url, json=None, headers=None, timeout=None):
+                seen.append(json["model"])
+                if json["model"] == "gemini-2.5-flash":
+                    return _HttpResp(404, {"error": {"code": 404, "message": "This model models/gemini-2.5-flash is no longer "
+                                           "available to new users. Please update your code to use models/gemini-3.6-flash for x"}},
+                                     text="This model models/gemini-2.5-flash is no longer available to new users. Please update "
+                                          "your code to use models/gemini-3.6-flash for the latest features")
+                return _HttpResp(200, {"choices": [{"message": {"content": json_dumps_judgment()}}], "model": json["model"]})
+        judge = LLMJudge(LLMConfig(enabled=True, provider="gemini", model="gemini-2.5-flash", api_key="k"), http=Sess())
+        v = judge.judge(Job(source="t", company="A", title="Embedded Intern", url="https://x/9", external_id="9", description="fw"))
+        self.assertTrue(v.ok, v.error)
+        self.assertEqual(seen, ["gemini-2.5-flash", "gemini-3.6-flash"])
+        self.assertEqual(judge.describe(), "gemini / gemini-3.6-flash")
+
+
+def json_dumps_judgment():
+    return json.dumps(judgment())

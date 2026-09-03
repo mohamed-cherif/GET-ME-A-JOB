@@ -91,7 +91,7 @@ sets the tier, and the judge's one-line summary is shown in the notification.
 | Provider | Key / setup | Notes |
 |---|---|---|
 | **Groq** (recommended free) | console.groq.com → API key → `GROQ_API_KEY` | Free tier, no card, very fast, Llama 3.3 70B. Plenty for a few hundred judgments a day. |
-| **Google Gemini** | aistudio.google.com → API key → `GEMINI_API_KEY` | Free tier (~1,500 requests/day), Gemini 2.5 Flash. |
+| **Google Gemini** | aistudio.google.com → API key → `GEMINI_API_KEY` | Free tier, Gemini Flash (`gemini-3.6-flash`). |
 | **Cerebras** | cloud.cerebras.ai → `CEREBRAS_API_KEY` | Free tier, Llama 3.3 70B. |
 | **OpenRouter** | openrouter.ai → `OPENROUTER_API_KEY` | Uses `:free` models; small daily quota without credits. |
 | **Mistral** | console.mistral.ai → `MISTRAL_API_KEY` | Free "experiment" tier. |

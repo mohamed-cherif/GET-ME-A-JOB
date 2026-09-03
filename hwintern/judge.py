@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -86,7 +87,7 @@ PROVIDERS: dict[str, dict] = {
     "groq":       {"base_url": "https://api.groq.com/openai/v1", "key_env": "GROQ_API_KEY",
                    "model": "llama-3.3-70b-versatile"},
     "gemini":     {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "key_env": "GEMINI_API_KEY",
-                   "model": "gemini-2.5-flash"},
+                   "model": "gemini-3.6-flash"},
     "cerebras":   {"base_url": "https://api.cerebras.ai/v1", "key_env": "CEREBRAS_API_KEY", "model": "llama-3.3-70b"},
     "openrouter": {"base_url": "https://openrouter.ai/api/v1", "key_env": "OPENROUTER_API_KEY",
                    "model": "meta-llama/llama-3.3-70b-instruct:free"},
@@ -191,6 +192,16 @@ def resolve_provider(cfg: LLMConfig) -> tuple[str, str, str, str]:
     if name == "openai_compatible" and not (base_url and model):
         raise JudgeError("auth", "openai_compatible needs llm.base_url and llm.model")
     return name, base_url, model, api_key
+
+
+_MODEL_HINT_RE = re.compile(r"(?:use|try|switch to)\s+(?:models/)?([A-Za-z0-9][A-Za-z0-9._:/-]{2,})", re.I)
+
+
+def _suggested_model(text: str) -> str:
+    m = _MODEL_HINT_RE.search(text or "")
+    if not m:
+        return ""
+    return m.group(1).rstrip(".,;:")
 
 
 def _ollama_alive(base_url: str = "") -> bool:
@@ -311,6 +322,7 @@ class OpenAICompatBackend:
         self.system_text = system_text
         self.temperature = temperature
         self._json_mode = True
+        self._switched = False
         if http is None:
             import requests
             http = requests.Session()
@@ -346,6 +358,17 @@ class OpenAICompatBackend:
                 continue
             if resp.status_code == 404 and self.name == "ollama":
                 raise JudgeError("auth", f"ollama: model {self.model!r} not found - run: ollama pull {self.model}")
+            if resp.status_code in (400, 404) and "model" in resp.text.lower():
+                # Providers retire model names and often name the replacement in the error text
+                # ("... please use models/gemini-x-flash ..."). Follow the hint once, otherwise give up clearly.
+                hinted = _suggested_model(resp.text)
+                if hinted and hinted != self.model and not self._switched:
+                    log.warning("%s: model %r unavailable; switching to %r as suggested by the provider", self.name, self.model, hinted)
+                    self.model = payload["model"] = hinted
+                    self._switched = True
+                    continue
+                raise JudgeError("auth", f"{self.name}: model {self.model!r} rejected ({resp.status_code}). "
+                                         f"Set LLM_MODEL to a current model id. Provider said: {resp.text[:160]}")
             if resp.status_code >= 500:
                 time.sleep(3 * (attempt + 1))
                 continue
