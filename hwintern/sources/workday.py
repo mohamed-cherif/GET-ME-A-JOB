@@ -73,14 +73,26 @@ class WorkdaySource(Source):
     def ident(self) -> str:
         return f"{self.host}|{self.tenant}|{self.site}"
 
+    BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/128.0.0.0 Safari/537.36")
+
     def _session(self):
         s = self.http.new_session()
-        try:  # prime cookies; some tenants 4xx the CXS endpoint without them
-            self.http.get(self.public_base, session=s, timeout=20)
+        # Workday tenants behind bot protection reject non-browser user agents, and the CXS API answers
+        # 422 when the POST arrives without the session cookies that the HTML page sets. So look like a
+        # browser and load the page first.
+        s.headers.update({"User-Agent": self.BROWSER_UA, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                          "Accept-Language": "en-US,en;q=0.9"})
+        prime_url = self.public_base if "myworkdaysite" in self.host else f"https://{self.host}/en-US/{self.site}"
+        self.prime_status = "n/a"
+        try:
+            r = self.http.get(prime_url, session=s, timeout=25)
+            self.prime_status = f"{r.status_code} cookies={sorted(s.cookies.keys())[:4]}"
         except Exception as exc:  # noqa: BLE001
+            self.prime_status = f"error {type(exc).__name__}"
             log.debug("workday %s cookie priming failed: %s", self.ident, exc)
         s.headers.update({"Accept": "application/json", "Content-Type": "application/json",
-                          "Origin": f"https://{self.host}", "Referer": self.public_base + "/",
+                          "Origin": f"https://{self.host}", "Referer": prime_url + "/",
                           "X-Requested-With": "XMLHttpRequest", **csrf_headers(s)})
         return s
 
@@ -122,8 +134,8 @@ class WorkdaySource(Source):
                     s = self._session()
                     continue
             if resp.status_code >= 400:
-                body = (resp.text or "")[:160].replace("\n", " ")
-                raise RuntimeError(f"HTTP {resp.status_code} from {self.cxs_base}/jobs: {body}")
+                body = (resp.text or "")[:120].replace("\n", " ")
+                raise RuntimeError(f"HTTP {resp.status_code} from {self.cxs_base}/jobs (page priming: {self.prime_status}): {body}")
             data = resp.json()
             postings = data.get("jobPostings") or []
             for p in postings:
