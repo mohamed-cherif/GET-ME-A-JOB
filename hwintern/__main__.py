@@ -25,7 +25,7 @@ def _setup_logging(level: str) -> None:
 def cmd_run(args, cfg):
     p = Pipeline(cfg, dry_run=args.dry_run)
     if args.loop:
-        p.run_forever()
+        p.run_forever(max_minutes=args.max_minutes)
     else:
         rep = p.run_once()
         print(rep.summary())
@@ -48,6 +48,30 @@ def cmd_test_notify(args, cfg):
             print(f"{n.name}: ok")
         except Exception as exc:  # noqa: BLE001
             print(f"{n.name}: FAILED - {exc}")
+    return 0
+
+
+def cmd_judge(args, cfg):
+    """Judge one posting by URL (fetches the description from its ATS) and print the verdict."""
+    from .judge import LLMJudge
+    from .models import Job
+    from .sources.enrich import fetch_description
+    from .filters import Classifier
+    http = Http(timeout=cfg.run.request_timeout)
+    job = Job(source="manual", company=args.company or "?", title=args.title or "?", url=args.url, external_id=args.url)
+    job.description = fetch_description(http, args.url)
+    print(f"description: {len(job.description)} chars" + ("" if job.description else " (none found for this site; judging title only)"))
+    judge = LLMJudge(cfg.llm)
+    if not judge.available:
+        print(f"LLM judge unavailable: {judge.disabled_reason}", file=sys.stderr)
+        return 1
+    v = judge.judge(job)
+    if not v.ok:
+        print(f"no judgment: {v.error}", file=sys.stderr)
+        return 1
+    print(json.dumps(v.data, indent=1))
+    ok, reason = judge.apply(job, v, Classifier(cfg.filters).tier_for)
+    print(f"-> {'ACCEPT' if ok else 'REJECT'} ({reason}); tier {job.tier}, score {job.score}")
     return 0
 
 
@@ -199,6 +223,7 @@ def main(argv=None) -> int:
 
     s = sub.add_parser("run", help="poll every source once (or forever with --loop)")
     s.add_argument("--loop", action="store_true")
+    s.add_argument("--max-minutes", type=float, default=None, help="with --loop: exit cleanly after this long")
     s.add_argument("--dry-run", action="store_true", help="classify and record, but do not notify")
     s.set_defaults(fn=cmd_run)
 
@@ -238,6 +263,12 @@ def main(argv=None) -> int:
     s.add_argument("--json", action="store_true")
     s.add_argument("--limit", type=int, default=1000)
     s.set_defaults(fn=cmd_export)
+
+    s = sub.add_parser("judge", help="run the LLM judge on one posting URL and show its verdict")
+    s.add_argument("url")
+    s.add_argument("--title")
+    s.add_argument("--company")
+    s.set_defaults(fn=cmd_judge)
 
     s = sub.add_parser("digest", help="show queued lower-tier postings, or send them now with --flush")
     s.add_argument("--flush", action="store_true")

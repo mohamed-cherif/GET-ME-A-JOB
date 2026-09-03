@@ -1,35 +1,36 @@
-# Zero-infrastructure option: GitHub Actions polls every board on a schedule and keeps the
-# "already seen" database in the Actions cache between runs.
+# Runs the watcher continuously on GitHub's servers.
 #
-# Setup: Settings -> Secrets and variables -> Actions -> add DISCORD_WEBHOOK_URL / TELEGRAM_* /
-# NTFY_TOPIC ... (any channel you configured in config.yaml). Then enable the workflow.
+# GitHub's cron scheduler is unreliable for short intervals (it frequently skips */5 runs), so instead
+# each job runs the watcher in a loop for ~5.5 hours (GitHub's per-job limit is 6h), saves its memory
+# of seen postings to the Actions cache, and then dispatches the next run of itself. An hourly cron
+# only acts as a watchdog that restarts the chain if a run ever dies.
 #
-# Note: GitHub runs cron jobs "at least" every 5 minutes and often delays them by several minutes
-# when runners are busy. For true real-time polling run `docker compose up -d` on any always-on box.
+# Secrets (Settings -> Secrets and variables -> Actions): TELEGRAM_BOT_TOKEN (or another channel),
+# ANTHROPIC_API_KEY for the LLM judge.
 name: hardware-internships-watch
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "7 * * * *"          # watchdog: restart the chain if nothing is running
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Classify only, do not notify"
+        description: "Classify only, do not notify, exit after one cycle"
         type: boolean
         default: false
 
 concurrency:
   group: hardware-internships-watch
-  cancel-in-progress: false
+  cancel-in-progress: false     # a queued run simply waits for the running one to finish
 
 permissions:
   contents: read
-  actions: write   # needed to save the state cache
+  actions: write                # save the cache + dispatch the next run
 
 jobs:
-  poll:
+  watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
 
@@ -63,12 +64,13 @@ jobs:
             exit 1
           fi
 
-      - name: Poll boards
+      - name: Watch (continuous loop, ~5.5h)
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          DISCORD_MENTION: ${{ vars.DISCORD_MENTION }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_MENTION: ${{ vars.DISCORD_MENTION }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NTFY_SERVER: ${{ vars.NTFY_SERVER }}
           NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
@@ -83,7 +85,7 @@ jobs:
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             python -m hwintern run --dry-run
           else
-            python -m hwintern run
+            python -m hwintern run --loop --max-minutes 335
           fi
 
       - name: Save seen-jobs database
@@ -97,9 +99,15 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: new-jobs-log
+          name: new-jobs-log-${{ github.run_id }}
           path: |
             state/NEW_JOBS.md
             state/new_jobs.jsonl
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: Start the next run
+        if: success() && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run hardware-internships.yml --ref main

@@ -180,7 +180,7 @@ class DiscordNotifier(Notifier):
                 embeds.append({
                     "title": truncate(f"{TIER_LABELS.get(j.tier, '')} {j.score} · {_star(j)}{j.company} — {j.title}", 250),
                     "url": j.url,
-                    "description": truncate(j.description.replace("\n", " "), 220) if j.description else "",
+                    "description": truncate(j.summary or j.description.replace("\n", " "), 220),
                     "color": {"target": 0x2ECC71, "match": 0x3498DB}.get(j.tier, 0xF1C40F),
                     "footer": {"text": f"{_fmt_posted(j)} · via {j.source}"},
                     "fields": fields,
@@ -282,7 +282,8 @@ class TelegramNotifier(Notifier):
                 fl = _flags_line(j)
                 block = (f"{_star(j) or '🔧 '}<b>{self._esc(j.company)}</b> — <a href=\"{j.url}\">{self._esc(j.title)}</a> "
                          f"<i>({j.score})</i>\n"
-                         f"📍 {self._esc(j.location) or 'n/a'}"
+                         + (f"💬 {self._esc(truncate(j.summary, 160))}\n" if j.summary else "")
+                         + f"📍 {self._esc(j.location) or 'n/a'}"
                          + (f" · 🗓 {self._esc(', '.join(j.detected_terms))}" if j.detected_terms else "")
                          + f" · {_fmt_posted(j)}"
                          + (f"\n⚠️ {self._esc(fl)}" if fl else "") + "\n")

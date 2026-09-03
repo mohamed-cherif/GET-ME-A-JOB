@@ -1,9 +1,11 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from hwintern.config import Config, RunConfig
 from hwintern.filters import FilterConfig
+from hwintern.judge import LLMConfig, LLMJudge
 from hwintern.notify import Notifier
 from hwintern.pipeline import Pipeline
 from hwintern.store import Store
@@ -20,10 +22,47 @@ class CaptureNotifier(Notifier):
         self.batches.append((heading, list(jobs)))
 
 
-def make_cfg(tmp, companies, aggregators=None, **run):
+def make_cfg(tmp, companies, aggregators=None, llm=None, **run):
     return Config(run=RunConfig(state_dir=str(tmp), workers=2, initial_max_age_days=None, **run),
-                  filters=FilterConfig(), notifiers=[], companies=companies, aggregators=aggregators or [],
-                  base_dir=Path(tmp))
+                  filters=FilterConfig(), llm=llm or LLMConfig(enabled=False), notifiers=[], companies=companies,
+                  aggregators=aggregators or [], base_dir=Path(tmp))
+
+
+class _Block:
+    def __init__(self, text): self.type, self.text = "text", text
+
+
+class _Resp:
+    def __init__(self, text, model="claude-opus-5", stop="end_turn"):
+        self.content, self.model, self.stop_reason = [_Block(text)], model, stop
+
+
+class FakeAnthropic:
+    """Stands in for anthropic.Anthropic: returns canned judgments keyed on the posting title."""
+    def __init__(self, verdicts):
+        self.verdicts, self.calls = verdicts, []
+        outer = self
+
+        class _Msgs:
+            def create(self, **kw):
+                outer.calls.append(kw)
+                text = kw["messages"][0]["content"]
+                for needle, data in outer.verdicts.items():
+                    if needle in text:
+                        return _Resp(json.dumps(data))
+                return _Resp(json.dumps(outer.verdicts["__default__"]))
+
+        class _Beta:
+            messages = _Msgs()
+        self.beta, self.messages = _Beta(), _Msgs()
+
+
+def judgment(**over):
+    d = {"is_internship": True, "role_family": "embedded_firmware", "hardware_relevance": 90, "undergrad_eligible": True,
+         "eligibility": "ok", "term": "Summer 2027", "fit_score": 88, "verdict": "strong",
+         "summary": "Bring up firmware on a flight controller.", "reasons": "embedded work"}
+    d.update(over)
+    return d
 
 
 GH = {"jobs": [
@@ -197,3 +236,68 @@ class TierAndDigestTests(unittest.TestCase):
             self.assertEqual(cap.batches[1][0][:6], "Digest")
             self.assertEqual(cap.batches[1][1][0].title, "Mechanical Engineering Intern - Fall 2027")
             self.assertEqual(p.store.digest_queue(), [])
+
+
+class LLMJudgeTests(unittest.TestCase):
+    def test_judge_rejects_junk_and_rescores_good_ones(self):
+        gh = {"jobs": [
+            {"id": 1, "title": "Embedded Firmware Intern - Summer 2027", "absolute_url": "https://boards.greenhouse.io/a/jobs/1",
+             "location": {"name": "Austin, TX"}, "content": "Write firmware for drones.", "updated_at": "2026-09-01T00:00:00Z"},
+            {"id": 2, "title": "Hardware Engineering Intern - Summer 2027", "absolute_url": "https://boards.greenhouse.io/a/jobs/2",
+             "location": {"name": "Austin, TX"}, "content": "You will build dashboards in React for the hardware team.",
+             "updated_at": "2026-09-01T00:00:00Z"},
+            {"id": 3, "title": "Electrical Engineering Intern - Summer 2027", "absolute_url": "https://boards.greenhouse.io/a/jobs/3",
+             "location": {"name": "Austin, TX"}, "content": "Must be a US citizen.", "updated_at": "2026-09-01T00:00:00Z"},
+        ]}
+        fake = FakeAnthropic({
+            "Embedded Firmware Intern": judgment(),
+            "Hardware Engineering Intern": judgment(role_family="software_only", hardware_relevance=10, fit_score=20,
+                                                    verdict="reject", summary="React dashboards"),
+            "Electrical Engineering Intern": judgment(eligibility="citizenship_or_clearance_required", verdict="reject"),
+            "__default__": judgment(),
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            http = FakeHttp({"boards-api.greenhouse.io/v1/boards/a/jobs": gh})
+            cfg = make_cfg(tmp, [{"kind": "greenhouse", "id": "a", "company": "A"}], llm=LLMConfig(enabled=True))
+            cfg.filters = FilterConfig(priority_keywords=["embedded"], exclude_flags=[])  # let the judge catch the citizenship one
+            store = Store(Path(tmp) / "db.sqlite3")
+            judge = LLMJudge(cfg.llm, store, client=fake)
+            cap = CaptureNotifier()
+            p = Pipeline(cfg, store=store, http=http, notifiers=[cap], judge=judge)
+            rep = p.run_once()
+            self.assertEqual(rep.llm_judged, 3)
+            self.assertEqual(rep.llm_rejected, 2)
+            self.assertEqual([j.title for j in rep.notified], ["Embedded Firmware Intern - Summer 2027"])
+            j = rep.notified[0]
+            self.assertEqual(j.summary, "Bring up firmware on a flight controller.")
+            self.assertIn("llm:strong", j.flags)
+            self.assertEqual(j.tier, "target")
+            # structured output + effort were requested, judgment cached
+            kw = fake.calls[0]
+            self.assertEqual(kw["output_config"]["format"]["type"], "json_schema")
+            self.assertEqual(kw["output_config"]["effort"], "low")
+            self.assertIn("Embedded", kw["messages"][0]["content"])
+            self.assertIsNotNone(store.get("judge:greenhouse:a:1"))
+
+    def test_judge_unavailable_falls_back_to_keywords(self):
+        gh = {"jobs": [{"id": 1, "title": "Embedded Firmware Intern - Summer 2027", "absolute_url": "https://boards.greenhouse.io/a/jobs/1",
+                        "location": {"name": "Austin, TX"}, "content": "x", "updated_at": "2026-09-01T00:00:00Z"}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            http = FakeHttp({"boards-api.greenhouse.io/v1/boards/a/jobs": gh})
+            cfg = make_cfg(tmp, [{"kind": "greenhouse", "id": "a", "company": "A"}], llm=LLMConfig(enabled=True))
+            judge = LLMJudge(cfg.llm, None, client=None)
+            judge.disabled_reason = "no key"
+            cap = CaptureNotifier()
+            rep = Pipeline(cfg, http=http, notifiers=[cap], judge=judge).run_once()
+            self.assertEqual(len(rep.notified), 1)
+            self.assertIn("llm-unjudged", rep.notified[0].flags)
+
+    def test_feed_hit_is_enriched_before_judging(self):
+        from hwintern.sources.enrich import fetch_description
+        http = FakeHttp({"boards-api.greenhouse.io/v1/boards/k2spacecorporation/jobs/5411918008":
+                         {"content": "&lt;p&gt;Design power boards for satellites.&lt;/p&gt;"},
+                         "api.lever.co/v0/postings/zoox/abc": {"descriptionPlain": "Firmware for sensors.", "lists": []}})
+        self.assertEqual(fetch_description(http, "https://job-boards.greenhouse.io/k2spacecorporation/jobs/5411918008"),
+                         "Design power boards for satellites.")
+        self.assertEqual(fetch_description(http, "https://jobs.lever.co/zoox/abc/apply"), "Firmware for sensors.")
+        self.assertEqual(fetch_description(http, "https://careers.example.com/jobs/1"), "")

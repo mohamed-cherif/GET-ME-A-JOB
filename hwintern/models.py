@@ -48,6 +48,7 @@ class Job:
     flags: list[str] = field(default_factory=list)
     score: int = 0              # fit score 0-100
     tier: str = "safety"        # target | match | safety
+    summary: str = ""           # one-line description of the work (from the LLM judge)
 
     @property
     def key(self) -> str:
@@ -77,6 +78,9 @@ class Job:
         j.flags = d.get("flags") or []
         j.score = int(d.get("score") or 0)
         j.tier = d.get("tier") or "safety"
+        j.summary = d.get("summary") or ""
+        if d.get("llm"):
+            j.extra["llm"] = d["llm"]
         return j
 
     def to_dict(self) -> dict:
@@ -97,4 +101,6 @@ class Job:
             "flags": self.flags,
             "score": self.score,
             "tier": self.tier,
+            "summary": self.summary,
+            "llm": self.extra.get("llm"),
         }

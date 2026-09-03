@@ -61,22 +61,30 @@ docker compose logs -f
 or without Docker: `deploy/hw-internships-watcher.service` (systemd, works on a Raspberry Pi or a
 free-tier cloud VM).
 
-**Option B - zero infrastructure (GitHub Actions):** `.github/workflows/hardware-internships.yml`
-runs the poll every 5 minutes and keeps the seen-jobs database in the Actions cache. Add your channel
-secrets under *Settings → Secrets and variables → Actions* (`TELEGRAM_BOT_TOKEN`, or `DISCORD_WEBHOOK_URL`,
-`NTFY_TOPIC`, …) and enable the workflow. GitHub may delay scheduled runs
-by a few minutes when runners are busy, so Option A is tighter.
+**Option B - zero infrastructure (GitHub Actions, the default here):** `.github/workflows/hardware-internships.yml`
+runs the watcher **continuously**: each job loops for about 5.5 hours (GitHub's per-job limit is 6), saves
+its memory of seen postings to the Actions cache, then dispatches the next run of itself. An hourly cron is
+only a watchdog that restarts the chain if a run dies. This avoids GitHub's cron scheduler, which routinely
+skips short intervals. Add your secrets under *Settings → Secrets and variables → Actions*
+(`TELEGRAM_BOT_TOKEN`, `ANTHROPIC_API_KEY`, …), then start the chain once from the Actions tab with
+"Run workflow". `run.interval_minutes` in `config.yaml` sets the polling cadence inside the loop.
 
-## Current personal settings (already in `config.yaml`)
+## The LLM judge (why the junk stops)
 
-| Setting | Value |
-|---|---|
-| Term | Summer 2027 first; every other future term is kept and flagged `other-term`; Spring/Summer/Winter 2026 dropped |
-| Countries | US, Canada, UK, Italy, France, Switzerland, Germany, Spain. Anything that resolves to another country is dropped. "Remote" / unresolvable locations are kept and flagged `location-unknown` |
-| Eligibility | Anything requiring US citizenship, a green card, a clearance, or ITAR "US person" status is **dropped**. "No visa sponsorship" postings are **kept and flagged**, because an internship on CPT does not need sponsorship |
-| Level | PhD-titled roles dropped; "graduate students only" wording flagged |
-| Focus | ⭐ priority for robotics, mechatronics, avionics, drones/UAV, aircraft, maritime/naval/ships, UUV/AUV/USV, autonomy, GNC, satellites, exoskeletons, humanoids, embedded/firmware, controls, perception/computer vision, PCB, electrical. Mechanical and manufacturing roles still included, unstarred |
-| Companies | Universities/colleges excluded |
+Keywords only pre-filter. Every posting they accept is then read by Claude (`claude-opus-5`, low effort,
+structured JSON output) together with the **full job description**, which the watcher fetches from the
+ATS even for community-feed hits. The judge answers: is it really an internship, what is the day-to-day
+work, is a bachelor's student eligible, does it require citizenship/clearance, and a 0-100 fit for the
+profile in `config.yaml` (`llm.profile`, written from the resume, edit it freely). A `reject` verdict or
+low hardware relevance drops the posting; otherwise the fit score (75%) plus the keyword score (25%)
+sets the tier, and the judge's one-line summary is shown in the notification.
+
+* Needs `ANTHROPIC_API_KEY` (console.anthropic.com → API keys) in `.env` or as a repository secret.
+  Without it the watcher silently falls back to keyword tiers and flags postings `llm-unjudged`.
+* Cost: roughly one to two cents per judged posting; judgments are cached so nothing is paid twice.
+  Expect a few dollars for the very first run and cents per day after that.
+* `python -m hwintern judge <posting URL>` shows the verdict for any single posting, handy for tuning
+  the profile text.
 
 ## Tiers: what buzzes your phone and what waits for the digest
 

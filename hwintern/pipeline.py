@@ -12,11 +12,13 @@ from typing import Optional
 from .config import Config
 from .filters import Classifier
 from .http import Http
+from .judge import LLMJudge
 from .models import Job
 from .notify import Notifier, build_notifiers, dispatch, sort_for_notification
 from .sources import build_source
 from .sources.base import Source
 from .sources.discovery import board_from_url
+from .sources.enrich import fetch_description
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -28,6 +30,8 @@ class CycleReport:
     sources_total: int = 0
     sources_failed: int = 0
     jobs_fetched: int = 0
+    llm_judged: int = 0
+    llm_rejected: int = 0
     jobs_new: int = 0
     jobs_matched: int = 0
     details_fetched: int = 0
@@ -39,17 +43,19 @@ class CycleReport:
     def summary(self) -> str:
         return (f"sources {self.sources_total - self.sources_failed}/{self.sources_total} ok · "
                 f"fetched {self.jobs_fetched} · new {self.jobs_new} · matched {self.jobs_matched} · "
-                f"details {self.details_fetched} · discovered boards {self.boards_discovered} · "
+                f"details {self.details_fetched} · llm judged {self.llm_judged} (rejected {self.llm_rejected}) · "
+                f"discovered boards {self.boards_discovered} · "
                 f"{self.duration_s:.1f}s")
 
 
 class Pipeline:
     def __init__(self, cfg: Config, store: Optional[Store] = None, http: Optional[Http] = None,
-                 notifiers: Optional[list[Notifier]] = None, dry_run: bool = False):
+                 notifiers: Optional[list[Notifier]] = None, dry_run: bool = False, judge: Optional[LLMJudge] = None):
         self.cfg = cfg
         self.http = http or Http(timeout=cfg.run.request_timeout)
         self.store = store or Store(cfg.db_path)
         self.classifier = Classifier(cfg.filters)
+        self.judge = judge if judge is not None else LLMJudge(cfg.llm, self.store)
         self.notifiers = notifiers if notifiers is not None else build_notifiers(cfg.notifiers, self.http, self.store)
         self.dry_run = dry_run
         self._stop = False
@@ -186,6 +192,9 @@ class Pipeline:
                     job.score, job.tier = v.score, v.tier
                     decided.append((job, v.accepted, v.reason))
 
+        # LLM judge: read the real posting for everything the keywords accepted
+        decided = self._judge_all(decided, rep)
+
         # decide what to notify
         max_age = self.cfg.run.initial_max_age_days
         to_notify: list[Job] = []
@@ -252,6 +261,47 @@ class Pipeline:
             log.info("failing sources (%d): %s", len(rep.errors), ", ".join(sorted(rep.errors)))
         return rep
 
+    # -- LLM judge ----------------------------------------------------------
+    def _judge_all(self, decided: list, rep: CycleReport) -> list:
+        judge = self.judge
+        if not self.cfg.llm.enabled:
+            return decided
+        accepted = [(j, ok, r) for (j, ok, r) in decided if ok]
+        if accepted and not judge.available:
+            log.warning("LLM judge unavailable (%s); falling back to keyword tiers", judge.disabled_reason or "no client")
+            for j, _, _ in accepted:
+                if "llm-unjudged" not in j.flags:
+                    j.flags.append("llm-unjudged")
+            return decided
+        # enrich descriptions first, so the judge sees the real posting (budgeted)
+        budget = max(0, self.cfg.run.detail_fetch_limit - rep.details_fetched)
+        need = [j for (j, ok, r) in accepted if not j.description]
+        if need and budget:
+            def _enrich(job):
+                job.description = fetch_description(self.http, job.url)
+                return job
+            with ThreadPoolExecutor(max_workers=min(8, self.cfg.run.workers)) as ex:
+                for job in ex.map(_enrich, need[:budget]):
+                    rep.details_fetched += 1
+                    if job.description:
+                        job.has_full_description = True
+        # judge (sequential-ish: a few threads keep rate limits comfortable)
+        by_key = {j.key: (j, ok, r) for (j, ok, r) in decided}
+
+        def _judge(job):
+            return job, judge.judge(job, job.score)
+
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            for job, verdict in ex.map(_judge, [j for (j, _, _) in accepted]):
+                if verdict.ok:
+                    rep.llm_judged += 1
+                ok, reason = judge.apply(job, verdict, self.classifier.tier_for)
+                if not ok:
+                    rep.llm_rejected += 1
+                    log.info("LLM rejected: %s — %s (%s)", job.company, job.title, reason)
+                by_key[job.key] = (job, ok, reason)
+        return list(by_key.values())
+
     # -- digest -------------------------------------------------------------
     def flush_digest(self, force: bool = False) -> int:
         """Send queued lower-tier postings once a day (at digest_time UTC) or when the queue is large."""
@@ -278,7 +328,9 @@ class Pipeline:
         return 0
 
     # -- forever ------------------------------------------------------------
-    def run_forever(self) -> None:
+    def run_forever(self, max_minutes: Optional[float] = None) -> None:
+        deadline = time.time() + max_minutes * 60 if max_minutes else None
+
         def _stop(*_):
             log.info("stop requested; finishing current cycle")
             self._stop = True
@@ -294,6 +346,9 @@ class Pipeline:
             except Exception as exc:  # noqa: BLE001
                 log.exception("cycle crashed: %s", exc)
             sleep_for = interval + random.uniform(0, self.cfg.run.jitter_seconds)
+            if deadline and time.time() + sleep_for > deadline:
+                log.info("max run time reached; exiting cleanly")
+                break
             log.info("next cycle in %.0fs", sleep_for)
             end = time.time() + sleep_for
             while not self._stop and time.time() < end:

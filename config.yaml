@@ -63,6 +63,31 @@ filters:
   exclude_sponsorship: ["U.S. Citizenship is Required"]
   exclude_flags: ["citizenship-required", "phd-title"]
 
+# LLM judge: after the keyword pre-filter, Claude reads each accepted posting (title + full description)
+# and decides whether it genuinely fits the profile below. Its verdict can reject junk and its fit
+# score drives the tier. Needs ANTHROPIC_API_KEY (in .env or as a GitHub Actions secret); without a
+# key the watcher falls back to keyword tiers. Judgments are cached, so each posting is paid for once.
+llm:
+  enabled: true
+  model: claude-opus-5
+  effort: low
+  max_calls_per_cycle: 120
+  min_relevance: 40            # hardware_relevance (0-100) below this -> rejected
+  keyword_weight: 0.25         # final score = 75% LLM fit + 25% keyword score
+  profile: |
+    Undergraduate in Electrical & Computer Engineering + Computer Science at Duke (bachelor's, graduating
+    May 2029; rising junior in Summer 2027), certificate in Robotics & Automation. Hands-on with embedded
+    systems (ESP32, Arduino, Raspberry Pi, C/C++), PCB design (KiCad), sensor integration, forward/inverse
+    kinematics and robotic-arm control, computer vision (YOLO, PyTorch), CAD and fabrication (SolidWorks,
+    3D printing, CNC), exoskeleton research, an autonomous UUV, a phone-controlled robot platform.
+    Wants: hardware / ECE internships, especially robotics, avionics, drones, ships/maritime systems,
+    embedded/firmware, electrical/PCB, controls, perception. Mechanical or manufacturing hardware roles are ok.
+    Not interested in pure software, web, data, ML-platform, IT or business roles.
+    Constraints: international student on F-1 (CPT covers internships; needs sponsorship for full-time later);
+    cannot take roles requiring US citizenship, a green card or a security clearance; undergraduate (no
+    PhD/Master's-only roles); locations US, Canada, UK, Italy, France, Switzerland, Germany, Spain;
+    Summer 2027 preferred, other terms acceptable.
+
 # Where notifications go. Every enabled channel receives every new posting.
 notifiers:
   - type: stdout

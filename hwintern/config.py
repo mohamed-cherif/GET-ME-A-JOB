@@ -9,6 +9,7 @@ from typing import Any, Optional
 import yaml
 
 from .filters import FilterConfig
+from .judge import LLMConfig
 
 _ENV_RE = re.compile(r"\$\{([A-Z0-9_]+)(?::-([^}]*))?\}")
 
@@ -83,6 +84,7 @@ class RunConfig:
 class Config:
     run: RunConfig
     filters: FilterConfig
+    llm: LLMConfig
     notifiers: list[dict]
     companies: list[dict]
     aggregators: list[dict]
@@ -109,6 +111,7 @@ def load_config(config_path: str | Path = "config.yaml", companies_path: Optiona
     run_raw = raw.get("run") or {}
     run = RunConfig(**{k: v for k, v in run_raw.items() if k in RunConfig.__dataclass_fields__})
     filters = FilterConfig.from_dict(raw.get("filters"))
+    llm = LLMConfig.from_dict(raw.get("llm"))
     notifiers = [n for n in (raw.get("notifiers") or []) if n and n.get("enabled", True)]
     companies_path = Path(companies_path) if companies_path else base_dir / (raw.get("companies_file") or "companies.yaml")
     comp_raw = load_yaml(companies_path)
@@ -118,5 +121,5 @@ def load_config(config_path: str | Path = "config.yaml", companies_path: Optiona
     # env-var override for the log level is handy in containers
     if os.environ.get("HWINTERN_LOG_LEVEL"):
         run.log_level = os.environ["HWINTERN_LOG_LEVEL"]
-    return Config(run=run, filters=filters, notifiers=notifiers, companies=companies,
+    return Config(run=run, filters=filters, llm=llm, notifiers=notifiers, companies=companies,
                   aggregators=aggregators, base_dir=base_dir, raw=raw)
