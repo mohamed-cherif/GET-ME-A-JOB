@@ -72,11 +72,28 @@ by a few minutes when runners are busy, so Option A is tighter.
 | Setting | Value |
 |---|---|
 | Term | Summer 2027 first; every other future term is kept and flagged `other-term`; Spring/Summer/Winter 2026 dropped |
+| Countries | US, Canada, UK, Italy, France, Switzerland, Germany, Spain. Anything that resolves to another country is dropped. "Remote" / unresolvable locations are kept and flagged `location-unknown` |
 | Eligibility | Anything requiring US citizenship, a green card, a clearance, or ITAR "US person" status is **dropped**. "No visa sponsorship" postings are **kept and flagged**, because an internship on CPT does not need sponsorship |
 | Level | PhD-titled roles dropped; "graduate students only" wording flagged |
-| Location | Everywhere (US, Canada, Europe…) |
-| Focus | ⭐ priority (sent first, urgent phone push) for robotics, mechatronics, avionics, drones/UAV, aircraft, maritime/naval/ships, UUV/AUV/USV, autonomy, GNC, satellites, exoskeletons, humanoids, embedded/firmware, controls, perception/computer vision, PCB, electrical. Mechanical and manufacturing roles still included, unstarred |
+| Focus | ⭐ priority for robotics, mechatronics, avionics, drones/UAV, aircraft, maritime/naval/ships, UUV/AUV/USV, autonomy, GNC, satellites, exoskeletons, humanoids, embedded/firmware, controls, perception/computer vision, PCB, electrical. Mechanical and manufacturing roles still included, unstarred |
 | Companies | Universities/colleges excluded |
+
+## Tiers: what buzzes your phone and what waits for the digest
+
+Every accepted posting gets a **fit score (0-100)** from: ⭐ priority keyword (+25), strong hardware
+category such as embedded/electrical/robotics/RF (+10, silicon +5, mechanical/validation-only −10),
+Summer 2027 (+15; unstated term +5; another season −10), US location (+5), and penalties for
+"no sponsorship" (−15), graduate-only (−20), unknown location (−5).
+
+| Tier | Score | Delivery |
+|---|---|---|
+| 🎯 **TARGET** | ≥ 75 | pushed immediately, with sound |
+| ✅ **MATCH** | 55-74 | pushed immediately, with sound |
+| 🟡 **SAFETY** | < 55 | collected and sent once a day as one silent digest (13:00 UTC = 9am New York), or earlier if 40 pile up |
+
+Change the thresholds under `filters.tier_*_min`, the delivery policy under `run.digest_*`, and which
+tiers arrive silently on Telegram under the notifier's `silent_tiers`. `python -m hwintern digest`
+shows what is waiting; `--flush` sends it now.
 
 ## Setting up the phone channels
 
@@ -85,8 +102,12 @@ by a few minutes when runners are busy, so Option A is tighter.
 2. Open your new bot's chat and press **Start** (or send it any message). That is all: the watcher
    reads the chat id from that message on its first run and remembers it.
 3. Put the token in `.env` as `TELEGRAM_BOT_TOKEN=` (or as the GitHub Actions secret of the same name).
-4. `python -m hwintern test-notify` should deliver a test message. If it says "no chat id yet", you
-   have not pressed Start on the bot; do that and retry. `TELEGRAM_CHAT_ID` can be set explicitly too.
+4. `python -m hwintern test-notify` prints a diagnosis line for Telegram, e.g.
+   `telegram: bot @yourbot (id 123) ok; chat id 456` and then delivers a test message.
+   * "token rejected (401)": the token in `.env` is wrong; paste the full `123456789:AA...` string.
+   * "no chat id yet": you have not pressed Start on the bot; do that and re-run.
+   * A stale webhook that blocks `getUpdates` is removed automatically.
+   `TELEGRAM_CHAT_ID` can also be set explicitly.
 
 **Discord:** create a private server, right-click the channel → *Edit channel* → *Integrations* →
 *Webhooks* → *New Webhook* → copy the URL into `DISCORD_WEBHOOK_URL`.
@@ -121,6 +142,7 @@ python -m hwintern add-board --kind workday --id "nvidia.wd5.myworkdayjobs.com|n
 python -m hwintern check-board greenhouse anduril   # live-fetch one board, show what would match
 python -m hwintern discover --apply                 # mine the community feeds for boards we don't poll yet
 python -m hwintern remove-board workday "host|tenant|site"
+python -m hwintern digest [--flush]                 # what is waiting for the daily digest / send it now
 python -m hwintern export                           # markdown table of everything matched so far
 python -m hwintern stats
 python -m hwintern reset --yes                      # forget everything (next run rebuilds the baseline)

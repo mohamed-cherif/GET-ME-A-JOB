@@ -197,7 +197,7 @@ class PersonalisedConfigTests(unittest.TestCase):
         c = job("Embedded Intern - Fall 2027", company="Beta")
         for j in (a, b, c):
             v = self.clf.classify(j)
-            j.flags = v.flags
+            j.flags, j.score, j.tier = v.flags, v.score, v.tier
         self.assertIn("priority", a.flags)
         self.assertNotIn("priority", b.flags)
         self.assertEqual([j.company for j in sort_for_notification([b, c, a])], ["Zeta", "Beta", "Alpha"])
@@ -213,3 +213,52 @@ class PersonalisedConfigTests(unittest.TestCase):
         self.assertTrue(self.clf.classify(job("Naval Architecture Intern - Ship Systems 2027")).accepted)
         self.assertTrue(self.clf.classify(job("Aircraft Systems Engineering Intern")).accepted)
         self.assertTrue(self.clf.classify(job("UUV Autonomy Intern")).accepted)
+
+
+class CountryAndTierTests(unittest.TestCase):
+    def setUp(self):
+        self.clf = Classifier(FilterConfig(countries_allow=["US", "CA", "GB", "IT", "FR", "CH", "DE", "ES"],
+                                           accept_other_terms=True, priority_keywords=["robot", "embedded"]))
+
+    def test_country_whitelist(self):
+        ok = lambda loc: self.clf.classify(job("Hardware Intern Summer 2027", location=loc)).accepted
+        for loc in ("Austin, TX", "Toronto, ON, Canada", "London, UK", "Munich, Germany", "Paris", "Zürich",
+                    "Milan, Italy", "Madrid, Spain", "Bengaluru, India; San Jose, CA"):
+            self.assertTrue(ok(loc), loc)
+        for loc in ("Cairo, Egypt", "Bengaluru, India", "Tel Aviv, Israel", "Shanghai, China", "Amsterdam, Netherlands",
+                    "Sydney, Australia", "Dublin, Ireland"):
+            self.assertFalse(ok(loc), loc)
+
+    def test_unknown_location_kept_and_flagged(self):
+        v = self.clf.classify(job("Hardware Intern Summer 2027", location="Remote"))
+        self.assertTrue(v.accepted)
+        self.assertIn("location-unknown", v.flags)
+        self.assertIn("remote", v.flags)
+        clf = Classifier(FilterConfig(countries_allow=["US"], drop_unknown_location=True))
+        self.assertFalse(clf.classify(job("Hardware Intern Summer 2027", location="Multiple Locations")).accepted)
+
+    def test_tiers(self):
+        target = self.clf.classify(job("Embedded Robotics Intern - Summer 2027", location="Boston, MA"))
+        self.assertEqual(target.tier, "target")
+        self.assertGreaterEqual(target.score, 75)
+        match = self.clf.classify(job("ASIC Design Intern - Summer 2027", location="Austin, TX"))
+        self.assertEqual(match.tier, "match")
+        safety = self.clf.classify(job("Mechanical Engineering Intern - Fall 2027", location="Remote",
+                                       desc="We are unable to sponsor visas."))
+        self.assertEqual(safety.tier, "safety")
+        self.assertLess(safety.score, 55)
+
+
+class GeoTests(unittest.TestCase):
+    def test_countries_for(self):
+        from hwintern.geo import countries_for
+        self.assertEqual(countries_for("Palo Alto, CA; Fremont, CA"), {"US"})
+        self.assertEqual(countries_for("Cambridge, UK"), {"GB"})
+        self.assertEqual(countries_for("Cambridge, MA"), {"US"})
+        self.assertEqual(countries_for("Vancouver, BC"), {"CA"})
+        self.assertEqual(countries_for("Munich, Germany; SF"), {"DE", "US"})
+        self.assertEqual(countries_for("Geneva"), {"CH"})
+        self.assertEqual(countries_for("Cairo, Egypt"), {"OTHER"})
+        self.assertEqual(countries_for("Remote"), set())
+        self.assertEqual(countries_for("Remote - US"), {"US"})
+        self.assertEqual(countries_for("LA"), {"US"})

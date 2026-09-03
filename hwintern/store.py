@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS jobs_url_norm ON jobs(url_norm);
 CREATE INDEX IF NOT EXISTS jobs_matched ON jobs(matched, first_seen);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS digest_queue (key TEXT PRIMARY KEY, data TEXT NOT NULL, queued_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS boards (
     kind      TEXT NOT NULL,
     ident     TEXT NOT NULL,
@@ -118,6 +119,23 @@ class Store:
             matched = self.conn.execute("SELECT COUNT(*) FROM jobs WHERE matched=1").fetchone()[0]
             boards = self.conn.execute("SELECT COUNT(*) FROM boards").fetchone()[0]
         return {"jobs_seen": total, "jobs_matched": matched, "discovered_boards": boards}
+
+    # -- digest queue -------------------------------------------------------
+    def queue_for_digest(self, jobs) -> None:
+        with self._lock:
+            self.conn.executemany("INSERT OR REPLACE INTO digest_queue(key, data, queued_at) VALUES (?,?,?)",
+                                  [(j.key, json.dumps(j.to_dict()), _now()) for j in jobs])
+            self.conn.commit()
+
+    def digest_queue(self) -> list[dict]:
+        with self._lock:
+            rows = self.conn.execute("SELECT data FROM digest_queue ORDER BY queued_at").fetchall()
+        return [json.loads(r["data"]) for r in rows]
+
+    def clear_digest_queue(self) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM digest_queue")
+            self.conn.commit()
 
     # -- boards -------------------------------------------------------------
     def add_board(self, kind: str, ident: str, company: str, params: Optional[dict] = None,

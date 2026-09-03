@@ -46,6 +46,8 @@ class Job:
     matched_categories: list[str] = field(default_factory=list)
     detected_terms: list[str] = field(default_factory=list)
     flags: list[str] = field(default_factory=list)
+    score: int = 0              # fit score 0-100
+    tier: str = "safety"        # target | match | safety
 
     @property
     def key(self) -> str:
@@ -61,6 +63,21 @@ class Job:
         now = now or datetime.now(timezone.utc)
         posted = self.posted_at if self.posted_at.tzinfo else self.posted_at.replace(tzinfo=timezone.utc)
         return (now - posted).total_seconds() / 86400.0
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Job":
+        from .textutil import parse_datetime  # local import to avoid a cycle
+        j = cls(source=d.get("source", ""), company=d.get("company", ""), title=d.get("title", ""),
+                url=d.get("url", ""), external_id=str(d.get("key", "").rsplit(":", 1)[-1]),
+                location=d.get("location", ""), board=d.get("board", ""), terms=d.get("terms") or [],
+                category=d.get("category", ""), sponsorship=d.get("sponsorship", ""),
+                posted_at=parse_datetime(d.get("posted_at")))
+        j.detected_terms = d.get("detected_terms") or []
+        j.matched_categories = d.get("matched_categories") or []
+        j.flags = d.get("flags") or []
+        j.score = int(d.get("score") or 0)
+        j.tier = d.get("tier") or "safety"
+        return j
 
     def to_dict(self) -> dict:
         return {
@@ -78,4 +95,6 @@ class Job:
             "matched_categories": self.matched_categories,
             "sponsorship": self.sponsorship,
             "flags": self.flags,
+            "score": self.score,
+            "tier": self.tier,
         }

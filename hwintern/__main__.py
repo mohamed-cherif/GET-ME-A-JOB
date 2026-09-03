@@ -42,10 +42,22 @@ def cmd_test_notify(args, cfg):
         return 1
     for n in ns:
         try:
+            if hasattr(n, "diagnose"):
+                print(f"{n.name}: {n.diagnose()}")
             n.send_text("✅ hardware internships watcher: notifications are working.")
             print(f"{n.name}: ok")
         except Exception as exc:  # noqa: BLE001
             print(f"{n.name}: FAILED - {exc}")
+    return 0
+
+
+def cmd_digest(args, cfg):
+    p = Pipeline(cfg)
+    n = p.flush_digest(force=args.flush)
+    rows = p.store.digest_queue()
+    print(f"sent {n} queued posting(s); {len(rows)} still queued" if args.flush else f"{len(rows)} posting(s) queued for the digest")
+    for r in rows[:50]:
+        print(f"  [{r.get('tier')} {r.get('score')}] {r['company']} — {r['title']} ({r['location']})")
     return 0
 
 
@@ -68,7 +80,7 @@ def cmd_check_board(args, cfg):
     shown = 0
     for j in jobs:
         v = clf.classify(j)
-        tag = "MATCH" if v.accepted else ("maybe" if v.needs_description else "-")
+        tag = f"{v.tier[:6]}{v.score}" if v.accepted else ("maybe" if v.needs_description else "-")
         if args.all or v.accepted or v.needs_description:
             print(f"  [{tag:5}] {j.title} | {j.location} | {v.reason} | {j.url}")
             shown += 1
@@ -148,9 +160,9 @@ def cmd_export(args, cfg):
     if args.json:
         print(json.dumps(rows, indent=1, ensure_ascii=False))
     else:
-        print("| Found | Company | Title | Location | Terms | Flags | Link |\n|---|---|---|---|---|---|---|")
+        print("| Found | Tier | Company | Title | Location | Terms | Flags | Link |\n|---|---|---|---|---|---|---|---|")
         for r in rows:
-            print(f"| {r['first_seen'][:16]} | {r['company']} | {r['title']} | {r['location']} | "
+            print(f"| {r['first_seen'][:16]} | {r.get('tier','')} {r.get('score','')} | {r['company']} | {r['title']} | {r['location']} | "
                   f"{', '.join(r.get('detected_terms') or [])} | {', '.join(r.get('flags') or [])} | [apply]({r['url']}) |")
     return 0
 
@@ -226,6 +238,10 @@ def main(argv=None) -> int:
     s.add_argument("--json", action="store_true")
     s.add_argument("--limit", type=int, default=1000)
     s.set_defaults(fn=cmd_export)
+
+    s = sub.add_parser("digest", help="show queued lower-tier postings, or send them now with --flush")
+    s.add_argument("--flush", action="store_true")
+    s.set_defaults(fn=cmd_digest)
 
     s = sub.add_parser("stats")
     s.set_defaults(fn=cmd_stats)

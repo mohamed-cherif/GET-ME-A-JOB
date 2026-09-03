@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
+from .geo import countries_for, is_remote
 from .models import Job
 
 # ---------------------------------------------------------------------------
@@ -164,6 +165,14 @@ class FilterConfig:
     require_internship: bool = True
     location_include: list[str] = field(default_factory=list)
     location_exclude: list[str] = field(default_factory=list)
+    # ISO codes. When set, a posting whose location resolves to a country outside the list is dropped;
+    # an unresolvable location ("Remote", "Multiple locations") is kept and flagged "location-unknown".
+    countries_allow: list[str] = field(default_factory=list)
+    drop_unknown_location: bool = False
+    # Fit-score thresholds (0-100) that split accepted postings into tiers.
+    tier_target_min: int = 75
+    tier_match_min: int = 55
+    preferred_countries: list[str] = field(default_factory=lambda: ["US"])   # small score bonus (CPT is simplest)
     exclude_sponsorship: list[str] = field(default_factory=list)  # aggregator labels, e.g. "U.S. Citizenship is Required"
     exclude_flags: list[str] = field(default_factory=list)        # e.g. ["citizenship-required"]
     trust_aggregator_category: bool = True
@@ -187,6 +196,8 @@ class Verdict:
     categories: list[str] = field(default_factory=list)
     terms: list[str] = field(default_factory=list)
     flags: list[str] = field(default_factory=list)
+    score: int = 0
+    tier: str = "safety"
 
 
 class Classifier:
@@ -292,6 +303,16 @@ class Classifier:
             return False
         return True
 
+    def country_check(self, location: str) -> tuple[Optional[bool], set[str]]:
+        """(ok | None when unknown, resolved country codes)."""
+        found = countries_for(location)
+        if not self.cfg.countries_allow:
+            return True, found
+        if not found:
+            return None, found
+        allow = {c.upper() for c in self.cfg.countries_allow}
+        return bool(found & allow), found
+
     def flags_for(self, text: str, title: str = "") -> list[str]:
         out = []
         for name, pat in FLAG_PATTERNS:
@@ -328,6 +349,11 @@ class Classifier:
 
         if not self.location_ok(job.location):
             return Verdict(False, "location")
+        country_ok, countries = self.country_check(job.location)
+        if country_ok is False:
+            return Verdict(False, f"country:{','.join(sorted(countries))}")
+        if country_ok is None and self.cfg.drop_unknown_location:
+            return Verdict(False, "location-unknown")
         if job.sponsorship and job.sponsorship in self.cfg.exclude_sponsorship:
             return Verdict(False, f"sponsorship:{job.sponsorship}")
 
@@ -371,7 +397,57 @@ class Classifier:
             flags.append("term-unknown")
         elif terms and not self.is_primary_term(terms) and not any(YEAR_RE.fullmatch(t) for t in terms):
             flags.append("other-term")
+        if country_ok is None:
+            flags.append("location-unknown")
+        if is_remote(job.location):
+            flags.append("remote")
         for f in self.cfg.exclude_flags:
             if f in flags:
                 return Verdict(False, f"flag:{f}", categories=cats, terms=terms, flags=flags)
-        return Verdict(True, "ok", needs_description=False, categories=cats, terms=terms, flags=flags)
+        score = self.fit_score(cats, flags, countries, ok)
+        return Verdict(True, "ok", needs_description=False, categories=cats, terms=terms, flags=flags,
+                       score=score, tier=self.tier_for(score))
+
+    # -- fit score ------------------------------------------------------------
+    STRONG_CATS = {"embedded", "electrical", "hardware", "robotics_controls", "analog_rf", "custom"}
+
+    def fit_score(self, cats: list[str], flags: list[str], countries: set[str], term_ok: Optional[bool]) -> int:
+        """0-100: how well the posting fits the profile. Drives the tier and notification priority."""
+        score = 40
+        base_cats = {c.split(":", 1)[-1] for c in cats}
+        if "priority" in flags:
+            score += 25
+        if base_cats & self.STRONG_CATS:
+            score += 10
+        elif "silicon" in base_cats:
+            score += 5
+        elif base_cats and base_cats <= {"mechanical", "test_validation"}:
+            score -= 10         # mechanical / validation only: kept, but for the digest
+        if any(c.startswith("desc:") for c in cats):
+            score -= 5          # hardware only inferred from the description
+        if term_ok is True and "other-term" not in flags:
+            score += 15         # the primary term
+        elif term_ok is None:
+            score += 5
+        else:
+            score -= 10         # another season
+        if countries & {c.upper() for c in self.cfg.preferred_countries}:
+            score += 5
+        if "location-unknown" in flags:
+            score -= 5
+        if "no-sponsorship" in flags:
+            score -= 15
+        if "grad-only" in flags:
+            score -= 20
+        elif "masters" in flags and "phd" in flags:
+            score -= 5
+        if "citizenship-required" in flags:
+            score -= 30
+        return max(0, min(100, score))
+
+    def tier_for(self, score: int) -> str:
+        if score >= self.cfg.tier_target_min:
+            return "target"
+        if score >= self.cfg.tier_match_min:
+            return "match"
+        return "safety"

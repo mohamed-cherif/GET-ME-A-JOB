@@ -157,6 +157,7 @@ class Pipeline:
                 detail_candidates.append((j, src))
                 continue
             j.matched_categories, j.detected_terms, j.flags = v.categories, v.terms, v.flags
+            j.score, j.tier = v.score, v.tier
             decided.append((j, v.accepted, v.reason))
 
         if detail_candidates:
@@ -182,6 +183,7 @@ class Pipeline:
                         log.debug("detail fetch failed for %s: %s", job.url, err)
                     v = self.classifier.classify(job)
                     job.matched_categories, job.detected_terms, job.flags = v.categories, v.terms, v.flags
+                    job.score, job.tier = v.score, v.tier
                     decided.append((job, v.accepted, v.reason))
 
         # decide what to notify
@@ -217,20 +219,31 @@ class Pipeline:
                     rep.boards_discovered += 1
                     log.info("discovered new board %s:%s (%s)", entry["kind"], entry["id"], j.company)
 
-        # notify
+        # notify: instant tiers now, digest tiers queued
         to_notify = sort_for_notification(to_notify)
+        digest_tiers = set(self.cfg.run.digest_tiers or [])
+        instant = [j for j in to_notify if j.tier not in digest_tiers]
+        queued = [j for j in to_notify if j.tier in digest_tiers]
         if to_notify:
             if self.dry_run:
-                log.info("dry-run: would notify %d job(s)", len(to_notify))
+                log.info("dry-run: would notify %d job(s) now, queue %d for the digest", len(instant), len(queued))
                 for j in to_notify:
-                    log.info("  %s — %s (%s) %s", j.company, j.title, j.location, j.url)
+                    log.info("  [%s %d] %s — %s (%s) %s", j.tier, j.score, j.company, j.title, j.location, j.url)
                     self.store.record(j, True, "ok", notified=False)
             else:
-                failed = dispatch(self.notifiers, to_notify)
-                notified = len(failed) < len(self.notifiers) or not self.notifiers
-                for j in to_notify:
-                    self.store.record(j, True, "ok", notified=notified)
-                rep.notified = to_notify
+                if instant:
+                    failed = dispatch(self.notifiers, instant)
+                    notified = len(failed) < len(self.notifiers) or not self.notifiers
+                    for j in instant:
+                        self.store.record(j, True, "ok", notified=notified)
+                    rep.notified = instant
+                if queued:
+                    self.store.queue_for_digest(queued)
+                    for j in queued:
+                        self.store.record(j, True, "ok-queued", notified=False)
+                    log.info("queued %d lower-tier posting(s) for the digest", len(queued))
+        if not self.dry_run:
+            self.flush_digest()
         if first_run:
             self.store.mark_first_run_done()
         rep.duration_s = time.time() - t0
@@ -238,6 +251,31 @@ class Pipeline:
         if rep.errors:
             log.info("failing sources (%d): %s", len(rep.errors), ", ".join(sorted(rep.errors)))
         return rep
+
+    # -- digest -------------------------------------------------------------
+    def flush_digest(self, force: bool = False) -> int:
+        """Send queued lower-tier postings once a day (at digest_time UTC) or when the queue is large."""
+        rows = self.store.digest_queue()
+        if not rows:
+            return 0
+        now = datetime.now(timezone.utc)
+        hh, mm = (self.cfg.run.digest_time or "13:00").split(":")
+        due_today = now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+        last = self.store.get("digest:last_date") or ""
+        due = now >= due_today and last != now.date().isoformat()
+        if not (force or due or len(rows) >= self.cfg.run.digest_max_queue):
+            return 0
+        jobs = sort_for_notification([Job.from_dict(r) for r in rows])
+        heading = f"Digest: {len(jobs)} lower-priority posting(s) since last time"
+        failed = dispatch(self.notifiers, jobs, heading=heading)
+        if len(failed) < len(self.notifiers) or not self.notifiers:
+            self.store.mark_notified([j.key for j in jobs])
+            self.store.clear_digest_queue()
+            self.store.set("digest:last_date", now.date().isoformat())
+            log.info("digest sent: %d posting(s)", len(jobs))
+            return len(jobs)
+        log.warning("digest not sent (all channels failed); will retry next cycle")
+        return 0
 
     # -- forever ------------------------------------------------------------
     def run_forever(self) -> None:

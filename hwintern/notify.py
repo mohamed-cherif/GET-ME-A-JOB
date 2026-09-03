@@ -17,8 +17,13 @@ from .textutil import truncate
 
 log = logging.getLogger(__name__)
 
+TIER_LABELS = {"target": "🎯 TARGET", "match": "✅ MATCH", "safety": "🟡 SAFETY"}
+TIER_ORDER = {"target": 0, "match": 1, "safety": 2}
+
 FLAG_LABELS = {
     "priority": "⭐ priority match",
+    "location-unknown": "location not stated (check country)",
+    "remote": "remote",
     "other-term": "not Summer term (see Term)",
     "phd-title": "PhD role",
     "grad-only": "graduate students only",
@@ -45,9 +50,25 @@ def _fmt_posted(job: Job) -> str:
     return f"posted: {int(age)}d ago"
 
 
+_QUIET_FLAGS = {"priority", "remote"}
+
+
 def _flags_line(job: Job) -> str:
-    fl = [FLAG_LABELS.get(f, f) for f in job.flags if f != "priority"]
+    fl = [FLAG_LABELS.get(f, f) for f in job.flags if f not in _QUIET_FLAGS]
     return (" · ".join(fl)) if fl else ""
+
+
+def tier_label(job: Job) -> str:
+    return f"{TIER_LABELS.get(job.tier, job.tier)} {job.score}"
+
+
+def group_by_tier(jobs: list[Job]) -> list[tuple[str, list[Job]]]:
+    out: list[tuple[str, list[Job]]] = []
+    for tier in ("target", "match", "safety"):
+        chunk = [j for j in jobs if j.tier == tier]
+        if chunk:
+            out.append((tier, chunk))
+    return out
 
 
 def _star(job: Job) -> str:
@@ -55,10 +76,8 @@ def _star(job: Job) -> str:
 
 
 def sort_for_notification(jobs: list[Job]) -> list[Job]:
-    """Priority matches first, then everything else, alphabetically by company."""
-    return sorted(jobs, key=lambda j: (0 if "priority" in j.flags else 1,
-                                       1 if "other-term" in j.flags else 0,
-                                       j.company.lower(), j.title.lower()))
+    """Best tier first, then highest fit score, then company."""
+    return sorted(jobs, key=lambda j: (TIER_ORDER.get(j.tier, 9), -j.score, j.company.lower(), j.title.lower()))
 
 
 def job_text_line(job: Job, markdown: bool = True) -> str:
@@ -80,7 +99,7 @@ class Notifier:
         self.http = http
         self.store = None  # set by the pipeline / CLI; lets a channel persist small bits of state
 
-    def send(self, jobs: list[Job]) -> None:  # pragma: no cover - interface
+    def send(self, jobs: list[Job], heading: str = "") -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
     def send_text(self, text: str) -> None:
@@ -91,9 +110,11 @@ class Notifier:
 class StdoutNotifier(Notifier):
     name = "stdout"
 
-    def send(self, jobs: list[Job]) -> None:
+    def send(self, jobs: list[Job], heading: str = "") -> None:
+        if heading:
+            print(f"== {heading} ==")
         for j in jobs:
-            print(f"[NEW] {job_text_line(j, markdown=False)}  ({_fmt_posted(j)}; via {j.source})")
+            print(f"[{tier_label(j)}] {job_text_line(j, markdown=False)}  ({_fmt_posted(j)}; via {j.source})")
 
     def send_text(self, text: str) -> None:
         print(text)
@@ -103,7 +124,7 @@ class FileNotifier(Notifier):
     """Appends to a JSONL log and a human-readable markdown file."""
     name = "file"
 
-    def send(self, jobs: list[Job]) -> None:
+    def send(self, jobs: list[Job], heading: str = "") -> None:
         base = Path(self.cfg.get("path") or "state")
         base.mkdir(parents=True, exist_ok=True)
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -116,9 +137,9 @@ class FileNotifier(Notifier):
         new_file = not md.exists()
         with md.open("a", encoding="utf-8") as fh:
             if new_file:
-                fh.write("# New hardware internship postings\n\n| Found | Company | Title | Location | Terms | Flags | Link |\n|---|---|---|---|---|---|---|\n")
+                fh.write("# New hardware internship postings\n\n| Found | Tier | Company | Title | Location | Terms | Flags | Link |\n|---|---|---|---|---|---|---|---|\n")
             for j in jobs:
-                fh.write(f"| {now[:16]} | {j.company} | {j.title} | {j.location} | {', '.join(j.detected_terms)} | "
+                fh.write(f"| {now[:16]} | {tier_label(j)} | {j.company} | {j.title} | {j.location} | {', '.join(j.detected_terms)} | "
                          f"{', '.join(j.flags)} | [apply]({j.url}) |\n")
 
     def send_text(self, text: str) -> None:
@@ -140,7 +161,7 @@ class DiscordNotifier(Notifier):
             return
         raise RuntimeError("discord: rate limited repeatedly")
 
-    def send(self, jobs: list[Job]) -> None:
+    def send(self, jobs: list[Job], heading: str = "") -> None:
         mention = self.cfg.get("mention") or ""
         for i in range(0, len(jobs), 10):
             chunk = jobs[i:i + 10]
@@ -157,14 +178,14 @@ class DiscordNotifier(Notifier):
                 if fl:
                     fields.append({"name": "Heads-up", "value": truncate(fl, 300), "inline": False})
                 embeds.append({
-                    "title": truncate(f"{_star(j)}{j.company} — {j.title}", 250),
+                    "title": truncate(f"{TIER_LABELS.get(j.tier, '')} {j.score} · {_star(j)}{j.company} — {j.title}", 250),
                     "url": j.url,
                     "description": truncate(j.description.replace("\n", " "), 220) if j.description else "",
-                    "color": 0xF1C40F if "priority" in j.flags else (0xE67E22 if "citizenship-required" in j.flags else 0x2ECC71),
+                    "color": {"target": 0x2ECC71, "match": 0x3498DB}.get(j.tier, 0xF1C40F),
                     "footer": {"text": f"{_fmt_posted(j)} · via {j.source}"},
                     "fields": fields,
                 })
-            content = f"{mention} {len(chunk)} new hardware internship posting(s)".strip() if i == 0 else ""
+            content = f"{mention} {heading or f'{len(jobs)} new hardware internship posting(s)'}".strip() if i == 0 else ""
             self._post({"content": content, "embeds": embeds, "allowed_mentions": {"parse": ["users", "roles", "everyone"]}})
             time.sleep(0.5)
 
@@ -189,7 +210,11 @@ class TelegramNotifier(Notifier):
             if cached:
                 return cached
         resp = self.http.get(self._api("getUpdates"), params={"allowed_updates": '["message"]'})
-        resp.raise_for_status()
+        if resp.status_code == 409:   # a webhook is set; getUpdates is blocked until it is removed
+            self.http.get(self._api("deleteWebhook"))
+            resp = self.http.get(self._api("getUpdates"), params={"allowed_updates": '["message"]'})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"telegram getUpdates failed: {self._describe(resp)}")
         updates = resp.json().get("result") or []
         for u in reversed(updates):
             msg = u.get("message") or u.get("edited_message") or {}
@@ -202,39 +227,72 @@ class TelegramNotifier(Notifier):
         raise RuntimeError("telegram: no chat id yet - open your bot in Telegram, press Start (send any message), "
                            "then retry; or set TELEGRAM_CHAT_ID")
 
-    def _send(self, text: str) -> None:
+    @staticmethod
+    def _describe(resp) -> str:
+        try:
+            d = resp.json()
+            return f"HTTP {resp.status_code}: {d.get('description') or d}"
+        except Exception:  # noqa: BLE001
+            return f"HTTP {resp.status_code}"
+
+    def diagnose(self) -> str:
+        """Human-readable check used by `test-notify`: token valid? chat id known?"""
+        resp = self.http.get(self._api("getMe"))
+        if resp.status_code == 401:
+            return "token rejected by Telegram (401). Re-check TELEGRAM_BOT_TOKEN: it must be the full " \
+                   "'123456789:AAxxxxxxxx' string from @BotFather, with no spaces or quotes."
+        resp.raise_for_status()
+        me = resp.json().get("result") or {}
+        info = f"bot @{me.get('username')} (id {me.get('id')}) ok"
+        hook = self.http.get(self._api("getWebhookInfo")).json().get("result") or {}
+        if hook.get("url"):
+            self.http.get(self._api("deleteWebhook"))
+            info += "; removed a stale webhook that was blocking getUpdates"
+        try:
+            chat = self.chat_id()
+            return f"{info}; chat id {chat}"
+        except RuntimeError as exc:
+            return f"{info}; {exc}"
+
+    def _send(self, text: str, silent: bool = False) -> None:
         chat = self.chat_id()
         url = self._api("sendMessage")
-        payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+        payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True,
+                   "disable_notification": silent}
         for attempt in range(5):
             resp = self.http.post(url, json=payload)
             if resp.status_code == 429:
                 wait = resp.json().get("parameters", {}).get("retry_after", 3)
                 time.sleep(min(float(wait), 30))
                 continue
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                raise RuntimeError(f"telegram sendMessage failed: {self._describe(resp)}")
             return
 
     @staticmethod
     def _esc(s: str) -> str:
         return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    def send(self, jobs: list[Job]) -> None:
-        lines, size = [], 0
-        for j in jobs:
-            fl = _flags_line(j)
-            block = (f"{_star(j) or '🔧 '}<b>{self._esc(j.company)}</b> — <a href=\"{j.url}\">{self._esc(j.title)}</a>\n"
-                     f"📍 {self._esc(j.location) or 'n/a'}"
-                     + (f" · 🗓 {self._esc(', '.join(j.detected_terms))}" if j.detected_terms else "")
-                     + f" · {_fmt_posted(j)}"
-                     + (f"\n⚠️ {self._esc(fl)}" if fl else "") + "\n")
-            if size + len(block) > 3800:
-                self._send("\n".join(lines))
-                lines, size = [], 0
-            lines.append(block)
-            size += len(block)
-        if lines:
-            self._send("\n".join(lines))
+    def send(self, jobs: list[Job], heading: str = "") -> None:
+        silent_tiers = set(self.cfg.get("silent_tiers") or ["safety"])
+        for tier, chunk in group_by_tier(jobs):
+            header = f"<b>{TIER_LABELS[tier]}</b> · {len(chunk)} posting(s)" + (f" · {self._esc(heading)}" if heading else "")
+            lines, size = [header, ""], len(header)
+            for j in chunk:
+                fl = _flags_line(j)
+                block = (f"{_star(j) or '🔧 '}<b>{self._esc(j.company)}</b> — <a href=\"{j.url}\">{self._esc(j.title)}</a> "
+                         f"<i>({j.score})</i>\n"
+                         f"📍 {self._esc(j.location) or 'n/a'}"
+                         + (f" · 🗓 {self._esc(', '.join(j.detected_terms))}" if j.detected_terms else "")
+                         + f" · {_fmt_posted(j)}"
+                         + (f"\n⚠️ {self._esc(fl)}" if fl else "") + "\n")
+                if size + len(block) > 3800:
+                    self._send("\n".join(lines), silent=tier in silent_tiers)
+                    lines, size = [f"<b>{TIER_LABELS[tier]}</b> (cont.)", ""], 40
+                lines.append(block)
+                size += len(block)
+            if len(lines) > 2:
+                self._send("\n".join(lines), silent=tier in silent_tiers)
 
     def send_text(self, text: str) -> None:
         self._send(self._esc(text))
@@ -243,14 +301,14 @@ class TelegramNotifier(Notifier):
 class SlackNotifier(Notifier):
     name = "slack"
 
-    def send(self, jobs: list[Job]) -> None:
+    def send(self, jobs: list[Job], heading: str = "") -> None:
         url = self.cfg["webhook_url"]
         for i in range(0, len(jobs), 20):
             chunk = jobs[i:i + 20]
             blocks = [{"type": "header", "text": {"type": "plain_text", "text": f"{len(chunk)} new hardware internship posting(s)"}}]
             for j in chunk:
                 fl = _flags_line(j)
-                text = (f"*<{j.url}|{j.company} — {j.title}>*\n{j.location or 'n/a'}"
+                text = (f"{tier_label(j)} · *<{j.url}|{j.company} — {j.title}>*\n{j.location or 'n/a'}"
                         + (f" · {', '.join(j.detected_terms)}" if j.detected_terms else "")
                         + f" · {_fmt_posted(j)}" + (f"\n:warning: {fl}" if fl else ""))
                 blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": truncate(text, 2900)}})
@@ -265,7 +323,7 @@ class NtfyNotifier(Notifier):
     """https://ntfy.sh — zero-signup push notifications to your phone."""
     name = "ntfy"
 
-    def send(self, jobs: list[Job]) -> None:
+    def send(self, jobs: list[Job], heading: str = "") -> None:
         base = (self.cfg.get("server") or "https://ntfy.sh").rstrip("/")
         topic = self.cfg["topic"]
         headers_base = {}
@@ -277,10 +335,10 @@ class NtfyNotifier(Notifier):
                    + f" · {_fmt_posted(j)}" + (f"\n⚠️ {fl}" if fl else "")
             headers = dict(headers_base)
             headers.update({
-                "Title": truncate(f"{'[PRIORITY] ' if 'priority' in j.flags else ''}{j.company}: {j.title}", 200).encode("ascii", "ignore").decode(),
+                "Title": truncate(f"[{j.tier.upper()} {j.score}] {j.company}: {j.title}", 200).encode("ascii", "ignore").decode(),
                 "Click": j.url,
                 "Tags": "wrench",
-                "Priority": "urgent" if "priority" in j.flags else self.cfg.get("priority", "high"),
+                "Priority": {"target": "urgent", "match": "high"}.get(j.tier, "low"),
                 "Actions": f"view, Apply, {j.url}",
             })
             resp = self.http.post(f"{base}/{topic}", data=body.encode("utf-8"), headers=headers)
@@ -319,14 +377,14 @@ class EmailNotifier(Notifier):
                 server.login(c["username"], c["password"])
             server.sendmail(msg["From"], to, msg.as_string())
 
-    def send(self, jobs: list[Job]) -> None:
-        subject = f"[HW internships] {len(jobs)} new posting(s): " + truncate(", ".join(sorted({j.company for j in jobs})), 80)
+    def send(self, jobs: list[Job], heading: str = "") -> None:
+        subject = f"[HW internships] {heading or f'{len(jobs)} new posting(s)'}: " + truncate(", ".join(sorted({j.company for j in jobs})), 80)
         text = "\n\n".join(f"{job_text_line(j, markdown=False)}\n{_fmt_posted(j)}" for j in jobs)
         rows = "".join(
-            f"<tr><td><b>{j.company}</b></td><td><a href='{j.url}'>{j.title}</a></td><td>{j.location}</td>"
+            f"<tr><td>{tier_label(j)}</td><td><b>{j.company}</b></td><td><a href='{j.url}'>{j.title}</a></td><td>{j.location}</td>"
             f"<td>{', '.join(j.detected_terms)}</td><td>{_flags_line(j)}</td><td>{_fmt_posted(j)}</td></tr>" for j in jobs)
         html = ("<p>New hardware internship postings:</p><table border='1' cellpadding='4' cellspacing='0'>"
-                "<tr><th>Company</th><th>Title</th><th>Location</th><th>Term</th><th>Heads-up</th><th>Posted</th></tr>"
+                "<tr><th>Tier</th><th>Company</th><th>Title</th><th>Location</th><th>Term</th><th>Heads-up</th><th>Posted</th></tr>"
                 f"{rows}</table>")
         self._send(subject, text, html)
 
@@ -338,10 +396,10 @@ class WebhookNotifier(Notifier):
     """Generic JSON POST (Zapier, Make, n8n, your own server...)."""
     name = "webhook"
 
-    def send(self, jobs: list[Job]) -> None:
+    def send(self, jobs: list[Job], heading: str = "") -> None:
         headers = {"Content-Type": "application/json"}
         headers.update(self.cfg.get("headers") or {})
-        payload = {"event": "new_jobs", "count": len(jobs), "jobs": [j.to_dict() for j in jobs]}
+        payload = {"event": "new_jobs", "heading": heading, "count": len(jobs), "jobs": [j.to_dict() for j in jobs]}
         self.http.post(self.cfg["url"], json=payload, headers=headers).raise_for_status()
 
     def send_text(self, text: str) -> None:
@@ -376,12 +434,12 @@ def build_notifiers(entries: list[dict], http: Http, store=None) -> list[Notifie
     return out
 
 
-def dispatch(notifiers: list[Notifier], jobs: list[Job]) -> list[str]:
+def dispatch(notifiers: list[Notifier], jobs: list[Job], heading: str = "") -> list[str]:
     """Send to every channel; returns names of channels that failed."""
     failed = []
     for n in notifiers:
         try:
-            n.send(jobs)
+            n.send(jobs, heading=heading)
         except Exception as exc:  # noqa: BLE001 - never let one channel kill the run
             log.error("notifier %s failed: %s", n.name, exc)
             failed.append(n.name)

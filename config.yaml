@@ -12,6 +12,11 @@ run:
   detail_fetch_limit: 150      # per cycle: extra per-posting requests (Workday/SmartRecruiters/Oracle descriptions)
   initial_max_age_days: 45     # first run only: don't notify about postings older than this (null = notify everything)
   auto_discover: true          # add boards discovered through the community feeds automatically
+  # Tiers: 🎯 target (fit score >= 75) and ✅ match (>= 55) are pushed the moment they appear.
+  # 🟡 safety postings are collected and sent once a day as a single digest (Telegram: silent).
+  digest_tiers: [safety]
+  digest_time: "13:00"         # UTC -> 9:00 New York / 15:00 Paris
+  digest_max_queue: 40         # send the digest early if this many pile up
   log_level: INFO
   state_dir: state             # sqlite db + NEW_JOBS.md live here
 
@@ -39,9 +44,17 @@ filters:
                       "exoskeleton", "humanoid", "manipulat", "embedded", "firmware", "control", "perception",
                       "computer vision", "\\bPCB\\b", "electrical"]
 
-  # Location filtering (regexes against the location string). Empty = anywhere (US, Canada, Europe...).
+  # Countries. A posting whose location resolves to a country outside this list is dropped. Locations
+  # that cannot be resolved ("Remote", "Multiple locations") are kept and flagged "location-unknown".
+  countries_allow: [US, CA, GB, IT, FR, CH, DE, ES]
+  drop_unknown_location: false
+  preferred_countries: [US]    # small fit-score bonus (CPT makes US internships the simplest)
+  # Extra regex filters on the raw location string, if you ever need them.
   location_include: []
   location_exclude: []
+  # Fit-score tier thresholds (0-100)
+  tier_target_min: 75
+  tier_match_min: 55
   exclude_companies: ["\\bUniversity\\b", "\\bCollege\\b"]   # regexes on the company name
 
   # Eligibility. No citizenship / green card -> drop anything that requires them (or a clearance / ITAR
@@ -59,6 +72,7 @@ notifiers:
     enabled: true
     bot_token: ${TELEGRAM_BOT_TOKEN}
     chat_id: ${TELEGRAM_CHAT_ID:-}
+    silent_tiers: [safety]     # these arrive without a sound/vibration
   - type: discord
     enabled: true
     webhook_url: ${DISCORD_WEBHOOK_URL}

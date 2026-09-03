@@ -16,8 +16,8 @@ class CaptureNotifier(Notifier):
     def __init__(self):
         self.batches = []
 
-    def send(self, jobs):
-        self.batches.append(list(jobs))
+    def send(self, jobs, heading=""):
+        self.batches.append((heading, list(jobs)))
 
 
 def make_cfg(tmp, companies, aggregators=None, **run):
@@ -107,7 +107,7 @@ class PipelineTests(unittest.TestCase):
         class Boom(Notifier):
             name = "boom"
             def __init__(self): pass
-            def send(self, jobs): raise RuntimeError("down")
+            def send(self, jobs, heading=""): raise RuntimeError("down")
         with tempfile.TemporaryDirectory() as tmp:
             http = FakeHttp({"boards-api.greenhouse.io/v1/boards/acme/jobs": GH})
             cfg = make_cfg(tmp, [{"kind": "greenhouse", "id": "acme", "company": "Acme"}])
@@ -170,3 +170,30 @@ class DotenvTests(unittest.TestCase):
                 self.assertEqual(cfg.notifiers[1]["webhook_url"], "https://x/y")
             finally:
                 os.environ.pop("HWTEST_TOKEN", None); os.environ.pop("HWTEST_HOOK", None)
+
+
+class TierAndDigestTests(unittest.TestCase):
+    def test_safety_tier_is_queued_and_flushed_as_digest(self):
+        gh = {"jobs": [
+            {"id": 1, "title": "Robotics Engineer Intern - Summer 2027", "absolute_url": "https://boards.greenhouse.io/a/jobs/1",
+             "location": {"name": "Austin, TX"}, "content": "x", "updated_at": "2026-09-01T00:00:00Z"},
+            {"id": 2, "title": "Mechanical Engineering Intern - Fall 2027", "absolute_url": "https://boards.greenhouse.io/a/jobs/2",
+             "location": {"name": "Remote"}, "content": "We cannot sponsor visas.", "updated_at": "2026-09-01T00:00:00Z"},
+        ]}
+        with tempfile.TemporaryDirectory() as tmp:
+            http = FakeHttp({"boards-api.greenhouse.io/v1/boards/a/jobs": gh})
+            cfg = make_cfg(tmp, [{"kind": "greenhouse", "id": "a", "company": "A"}])
+            cfg.filters = FilterConfig(accept_other_terms=True, priority_keywords=["robot"], countries_allow=["US", "DE"])
+            cfg.run.digest_time = "23:59"   # not due yet
+            cap = CaptureNotifier()
+            p = Pipeline(cfg, http=http, notifiers=[cap])
+            rep = p.run_once()
+            self.assertEqual([j.tier for j in rep.notified], ["target"])
+            self.assertEqual(len(cap.batches), 1)
+            queued = p.store.digest_queue()
+            self.assertEqual([q["tier"] for q in queued], ["safety"])
+            self.assertIn("location-unknown", queued[0]["flags"])
+            self.assertEqual(p.flush_digest(force=True), 1)
+            self.assertEqual(cap.batches[1][0][:6], "Digest")
+            self.assertEqual(cap.batches[1][1][0].title, "Mechanical Engineering Intern - Fall 2027")
+            self.assertEqual(p.store.digest_queue(), [])
