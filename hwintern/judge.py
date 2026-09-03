@@ -351,7 +351,8 @@ class OpenAICompatBackend:
 
     def complete(self, user_text: str) -> tuple[str, str]:
         payload: dict[str, Any] = {
-            "model": self.model, "temperature": self.temperature, "max_tokens": 900,
+            # generous: "thinking" models (Gemini, o-series, qwen3) spend output tokens reasoning before the JSON
+            "model": self.model, "temperature": self.temperature, "max_tokens": 4096,
             "messages": [{"role": "system", "content": self.system_text + "\n\nRespond with a single JSON object with exactly these keys: "
                           + ", ".join(JUDGE_SCHEMA["properties"].keys()) + "."},
                          {"role": "user", "content": user_text}],
@@ -400,6 +401,9 @@ class OpenAICompatBackend:
             text = ((choice.get("message") or {}).get("content")) or ""
             if isinstance(text, list):  # some providers return content parts
                 text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
+            if choice.get("finish_reason") == "length" and payload["max_tokens"] < 16000:
+                payload["max_tokens"] = 16000      # reply was cut off: once more with a much larger budget
+                continue
             return text, data.get("model") or self.model
         raise JudgeError("ratelimit", f"{self.name}: rate limited / unavailable")
 
@@ -481,7 +485,7 @@ class LLMJudge:
         try:
             data = normalize_judgment(extract_json(text))
         except (json.JSONDecodeError, ValueError, TypeError):
-            log.warning("LLM judge returned non-JSON for %s: %r", job.url, text[:120])
+            log.warning("LLM judge returned non-JSON for %s (%d chars): %r", job.url, len(text or ""), (text or "")[-300:])
             return Judgment(False, error="unparseable response")
         data["model"] = model
         self.remember(job, data)

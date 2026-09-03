@@ -3,11 +3,40 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from ..textutil import html_to_text, parse_datetime
 from .base import Source
 
 log = logging.getLogger(__name__)
+
+_AGO_RE = re.compile(r"posted\s+(?:(today)|(yesterday)|(\d+)\+?\s+(day|week|month)s?\s+ago)", re.I)
+
+
+def parse_posted_on(text: Optional[str], now: Optional[datetime] = None) -> Optional[datetime]:
+    """'Posted Today' / 'Posted Yesterday' / 'Posted 3 Days Ago' / 'Posted 30+ Days Ago' -> approximate datetime."""
+    if not text:
+        return None
+    m = _AGO_RE.search(text)
+    if not m:
+        return parse_datetime(text)
+    now = now or datetime.now(timezone.utc)
+    if m.group(1):
+        return now
+    if m.group(2):
+        return now - timedelta(days=1)
+    n, unit = int(m.group(3)), m.group(4).lower()
+    return now - timedelta(days=n * {"day": 1, "week": 7, "month": 30}[unit])
+
+
+def csrf_headers(session) -> dict:
+    """Workday's CXS endpoints reject POSTs (422) on some tenants unless the CSRF cookie is echoed as a header."""
+    try:
+        token = session.cookies.get("CALYPSO_CSRF_TOKEN")
+    except Exception:  # noqa: BLE001
+        token = None
+    return {"X-CALYPSO-CSRF-TOKEN": token} if token else {}
 
 
 def workday_parts(entry: dict) -> tuple[str, str, str]:
@@ -51,7 +80,8 @@ class WorkdaySource(Source):
         except Exception as exc:  # noqa: BLE001
             log.debug("workday %s cookie priming failed: %s", self.ident, exc)
         s.headers.update({"Accept": "application/json", "Content-Type": "application/json",
-                          "Origin": f"https://{self.host}", "Referer": self.public_base + "/"})
+                          "Origin": f"https://{self.host}", "Referer": self.public_base + "/",
+                          "X-Requested-With": "XMLHttpRequest", **csrf_headers(s)})
         return s
 
     def _discover_site(self) -> bool:
@@ -91,7 +121,9 @@ class WorkdaySource(Source):
                 if self._discover_site():
                     s = self._session()
                     continue
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                body = (resp.text or "")[:160].replace("\n", " ")
+                raise RuntimeError(f"HTTP {resp.status_code} from {self.cxs_base}/jobs: {body}")
             data = resp.json()
             postings = data.get("jobPostings") or []
             for p in postings:
@@ -105,7 +137,7 @@ class WorkdaySource(Source):
                     url=f"{self.public_base}{path}",
                     external_id=ext_id,
                     location=p.get("locationsText") or "",
-                    posted_at=None,  # "Posted 3 Days Ago" strings are not reliable; details give the date
+                    posted_at=parse_posted_on(p.get("postedOn")),
                     extra={"posted_on": p.get("postedOn"), "bullets": p.get("bulletFields"), "path": path},
                 ))
             offset += limit

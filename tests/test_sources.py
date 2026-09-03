@@ -173,3 +173,29 @@ class WorkdayRepairTests(unittest.TestCase):
         self.assertEqual(src.site, "Qualcomm_Careers")
         self.assertEqual(jobs[0].url, "https://qualcomm.wd5.myworkdayjobs.com/Qualcomm_Careers/job/SD/RF-Intern_JR1")
         self.assertEqual(src.store.get("workday-site:qualcomm.wd5.myworkdayjobs.com|qualcomm"), "Qualcomm_Careers")
+
+
+class WorkdayHelpersTests(unittest.TestCase):
+    def test_posted_on_parsing(self):
+        from datetime import datetime, timezone
+        from hwintern.sources.workday import parse_posted_on
+        now = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
+        self.assertEqual(parse_posted_on("Posted Today", now), now)
+        self.assertEqual(parse_posted_on("Posted Yesterday", now).day, 2)
+        self.assertEqual(parse_posted_on("Posted 3 Days Ago", now).day, 31)
+        self.assertEqual(parse_posted_on("Posted 30+ Days Ago", now).month, 8)
+        self.assertIsNone(parse_posted_on(""))
+
+    def test_csrf_header_from_cookie(self):
+        from hwintern.sources.workday import csrf_headers
+
+        class Jar(dict):
+            pass
+
+        class S:
+            cookies = Jar(CALYPSO_CSRF_TOKEN="abc")
+        self.assertEqual(csrf_headers(S()), {"X-CALYPSO-CSRF-TOKEN": "abc"})
+
+        class S2:
+            cookies = Jar()
+        self.assertEqual(csrf_headers(S2()), {})
