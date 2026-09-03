@@ -25,6 +25,36 @@ def _interpolate(obj: Any) -> Any:
     return obj
 
 
+def load_dotenv(path: Path, override: bool = False) -> int:
+    """Load KEY=value lines from a .env file into os.environ (no dependency on python-dotenv).
+
+    Existing environment variables win unless override=True. Supports comments, blank lines,
+    an optional `export ` prefix, single/double quotes and Windows line endings.
+    """
+    if not path.exists():
+        return 0
+    loaded = 0
+    for raw in path.read_text(encoding="utf-8-sig").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if not key or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        else:
+            value = re.split(r"\s+#", value, 1)[0].rstrip()   # strip trailing " # comment"
+        if override or not os.environ.get(key):
+            os.environ[key] = value
+            loaded += 1
+    return loaded
+
+
 def load_yaml(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -69,6 +99,9 @@ class Config:
 def load_config(config_path: str | Path = "config.yaml", companies_path: Optional[str | Path] = None) -> Config:
     config_path = Path(config_path).resolve()
     base_dir = config_path.parent
+    # .env next to config.yaml (and in the current directory) is loaded automatically
+    for env_file in {base_dir / ".env", Path.cwd() / ".env"}:
+        load_dotenv(env_file)
     raw = load_yaml(config_path)
     run_raw = raw.get("run") or {}
     run = RunConfig(**{k: v for k, v in run_raw.items() if k in RunConfig.__dataclass_fields__})

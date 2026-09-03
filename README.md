@@ -26,11 +26,11 @@ internship posting** to your phone the moment it appears, so you can apply first
 
 ```bash
 cd hardware-internships-scraper
-python3 -m venv .venv && . .venv/bin/activate
+python3 -m venv .venv && . .venv/bin/activate   # Windows: py -m venv .venv; .venv\Scripts\activate
 pip install -r requirements.txt
 
 cp .env.example .env         # fill in at least one channel (Telegram bot token is the easiest)
-set -a; . ./.env; set +a     # export the variables for this shell
+                             # .env is read automatically (Windows, macOS, Linux)
 python -m hwintern test-notify          # every configured channel should say "ok"
 
 python -m hwintern run --dry-run        # first pass: builds the baseline, shows what it would send

@@ -149,3 +149,24 @@ class TelegramTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             n.send_text("x")
         self.assertIn("press Start", str(ctx.exception))
+
+
+class DotenvTests(unittest.TestCase):
+    def test_env_file_next_to_config_is_loaded(self):
+        import os
+        from hwintern.config import load_config
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "config.yaml").write_text(
+                "notifiers:\n  - type: telegram\n    bot_token: ${HWTEST_TOKEN}\n"
+                "  - type: discord\n    webhook_url: ${HWTEST_HOOK}\n", encoding="utf-8")
+            (d / ".env").write_text(
+                "# comment\r\nHWTEST_TOKEN=123:abc\r\nexport HWTEST_HOOK=\"https://x/y\"  \r\n\r\nbad line\r\n",
+                encoding="utf-8")
+            os.environ.pop("HWTEST_TOKEN", None); os.environ.pop("HWTEST_HOOK", None)
+            try:
+                cfg = load_config(d / "config.yaml")
+                self.assertEqual(cfg.notifiers[0]["bot_token"], "123:abc")
+                self.assertEqual(cfg.notifiers[1]["webhook_url"], "https://x/y")
+            finally:
+                os.environ.pop("HWTEST_TOKEN", None); os.environ.pop("HWTEST_HOOK", None)
