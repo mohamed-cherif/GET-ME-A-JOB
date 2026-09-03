@@ -447,3 +447,40 @@ class TelegramCommandTests(unittest.TestCase):
             self.assertEqual(store.get("telegram:update_offset"), "9")
             self.assertIn("/status", p.handle_command("help"))
             self.assertIn("Acme", p.handle_command("last"))
+
+
+class ParkingAndJudgeRobustnessTests(unittest.TestCase):
+    def test_failing_board_is_parked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            http = FakeHttp({})   # every board 404s
+            cfg = make_cfg(tmp, [{"kind": "greenhouse", "id": "dead", "company": "Dead"}])
+            cfg.run.max_board_failures = 2
+            p = Pipeline(cfg, http=http, notifiers=[CaptureNotifier()])
+            p.store.mark_first_run_done()
+            self.assertEqual(p.run_once().sources_failed, 1)
+            self.assertEqual(p.run_once().sources_failed, 1)
+            rep = p.run_once()               # parked now: no request, no error
+            self.assertEqual(rep.sources_failed, 0)
+            self.assertEqual(sum(1 for m, u in http.calls if "dead" in u), 2)
+
+    def test_word_scores_and_schema_downgrade(self):
+        from hwintern.judge import normalize_judgment, LLMJudge, LLMConfig
+        from hwintern.models import Job
+        d = normalize_judgment({"is_internship": True, "role_family": "Mechanical", "hardware_relevance": "High",
+                                "undergrad_eligible": True, "eligibility": "OK", "term": "Summer 2027",
+                                "fit_score": "72%", "verdict": "Good", "summary": "s", "reasons": "r"})
+        self.assertEqual((d["hardware_relevance"], d["fit_score"], d["verdict"], d["role_family"], d["eligibility"]),
+                         (85, 72, "good", "mechanical", "ok"))
+        modes = []
+
+        class Sess:
+            def post(self, url, json=None, headers=None, timeout=None):
+                rf = (json.get("response_format") or {}).get("type")
+                modes.append(rf)
+                if rf == "json_schema":
+                    return _HttpResp(400, {"error": "json_schema not supported"}, text="response_format json_schema not supported")
+                return _HttpResp(200, {"choices": [{"message": {"content": json_dumps_judgment()}}]})
+        judge = LLMJudge(LLMConfig(enabled=True, provider="groq", api_key="k"), http=Sess())
+        v = judge.judge(Job(source="t", company="A", title="Embedded Intern", url="https://x/5", external_id="5", description="fw"))
+        self.assertTrue(v.ok, v.error)
+        self.assertEqual(modes, ["json_schema", "json_object"])

@@ -93,14 +93,29 @@ class Pipeline:
             s.store = self.store
         return srcs
 
+    def _failures(self, src: Source) -> int:
+        return int(self.store.get(f"fail:{src.kind}:{src.ident}") or 0)
+
     def _run_source(self, src: Source) -> tuple[Source, list[Job], Optional[str]]:
+        key = f"fail:{src.kind}:{src.ident}"
+        n = self._failures(src)
+        limit = int(self.cfg.run.max_board_failures)
+        if limit and n >= limit and (n - limit) % 50 != 0:
+            # dead board: skip it, but retry once every 50 cycles in case it came back
+            self.store.set(key, str(n + 1))
+            return src, [], None
         try:
             jobs = src.fetch()
             self.store.board_result(src.kind, src.ident, None)
+            if n:
+                self.store.set(key, "0")
             return src, jobs, None
         except Exception as exc:  # noqa: BLE001
             msg = f"{type(exc).__name__}: {exc}"
             self.store.board_result(src.kind, src.ident, msg)
+            self.store.set(key, str(n + 1))
+            if n + 1 == limit:
+                log.warning("board %s failed %d times in a row; parking it (python -m hwintern boards shows it)", src.label, n + 1)
             return src, [], msg
 
     # -- one cycle ----------------------------------------------------------
@@ -264,6 +279,9 @@ class Pipeline:
         log.info("cycle done: %s", rep.summary())
         if rep.errors:
             log.info("failing sources (%d): %s", len(rep.errors), ", ".join(sorted(rep.errors)))
+        parked = [s.label for s in sources if self._failures(s) >= int(self.cfg.run.max_board_failures or 10**9)]
+        if parked:
+            log.info("parked boards (%d, failed repeatedly): %s", len(parked), ", ".join(sorted(parked)))
         return rep
 
     # -- LLM judge ----------------------------------------------------------

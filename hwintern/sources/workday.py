@@ -54,13 +54,43 @@ class WorkdaySource(Source):
                           "Origin": f"https://{self.host}", "Referer": self.public_base + "/"})
         return s
 
+    def _discover_site(self) -> bool:
+        """The tenant root redirects to its default career site (e.g. /en-US/Qualcomm_Careers). Adopt it."""
+        try:
+            resp = self.http.get(f"https://{self.host}/", timeout=20, allow_redirects=True)
+        except Exception:  # noqa: BLE001
+            return False
+        path = [seg for seg in resp.url.split("/")[3:] if seg]
+        site = next((seg for seg in path if not re.fullmatch(r"[a-z]{2}-[A-Za-z]{2}", seg)), None)
+        if not site or site == self.site or site in ("job", "details", "wday"):
+            return False
+        log.info("workday %s: site %r not found, switching to %r (from the tenant's redirect)", self.host, self.site, site)
+        self.site = site
+        self.public_base = f"https://{self.host}/{self.site}"
+        self.cxs_base = f"https://{self.host}/wday/cxs/{self.tenant}/{self.site}"
+        if self.store is not None:
+            self.store.set(f"workday-site:{self.host}|{self.tenant}", site)
+        return True
+
     def fetch(self):
+        if self.store is not None:
+            fixed = self.store.get(f"workday-site:{self.host}|{self.tenant}")
+            if fixed and fixed != self.site:
+                self.site = fixed
+                self.public_base = f"https://{self.host}/{self.site}"
+                self.cxs_base = f"https://{self.host}/wday/cxs/{self.tenant}/{self.site}"
         s = self._session()
         jobs, offset, limit = [], 0, 20
+        repaired = False
         while offset < self.max_results:
             payload = {"appliedFacets": self.entry.get("facets") or {}, "limit": limit, "offset": offset,
                        "searchText": self.search_text}
             resp = self.http.post(f"{self.cxs_base}/jobs", session=s, json=payload)
+            if resp.status_code in (404, 422) and not repaired and offset == 0:
+                repaired = True
+                if self._discover_site():
+                    s = self._session()
+                    continue
             resp.raise_for_status()
             data = resp.json()
             postings = data.get("jobPostings") or []

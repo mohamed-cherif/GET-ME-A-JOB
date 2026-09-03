@@ -231,12 +231,17 @@ def extract_json(text: str) -> dict:
 
 def normalize_judgment(d: dict) -> dict:
     """Coerce a loosely-typed reply (small open models drift) into the schema."""
-    out = dict(d)
+    out = {str(k).strip().lower(): v for k, v in d.items()}
+    words = {"very high": 92, "high": 85, "strong": 85, "medium": 55, "moderate": 55, "good": 70, "low": 25,
+             "weak": 40, "none": 0, "very low": 10}
     for k in ("hardware_relevance", "fit_score"):
+        v = out.get(k, 0)
         try:
-            out[k] = max(0, min(100, int(float(out.get(k, 0)))))
+            out[k] = max(0, min(100, int(float(v))))
         except (TypeError, ValueError):
-            out[k] = 0
+            out[k] = words.get(str(v).strip().lower().rstrip("%"), 50)
+    out["role_family"] = str(out.get("role_family") or "other").strip().lower().replace(" ", "_").replace("/", "_")
+    out["eligibility"] = str(out.get("eligibility") or "unclear").strip().lower()
     for k in ("is_internship", "undergrad_eligible"):
         v = out.get(k, True)
         out[k] = v if isinstance(v, bool) else str(v).strip().lower() in ("true", "yes", "1")
@@ -249,8 +254,7 @@ def normalize_judgment(d: dict) -> dict:
         out["eligibility"] = "unclear"
     out["summary"] = str(out.get("summary") or "")[:200]
     out["reasons"] = str(out.get("reasons") or "")[:400]
-    out.setdefault("role_family", "other")
-    out.setdefault("term", "unstated")
+    out["term"] = str(out.get("term") or "unstated")
     return out
 
 
@@ -321,8 +325,9 @@ class OpenAICompatBackend:
         self.name, self.base_url, self.model, self.api_key = provider, base_url.rstrip("/"), model, api_key
         self.system_text = system_text
         self.temperature = temperature
-        self._json_mode = True
+        self._json_mode = "schema"      # schema -> object -> none, downgraded when a provider rejects it
         self._switched = False
+        self.timeout = 90
         if http is None:
             import requests
             http = requests.Session()
@@ -333,7 +338,15 @@ class OpenAICompatBackend:
         if self.name == "openrouter":
             headers["HTTP-Referer"] = "https://github.com/mohamed-cherif/GET-ME-A-JOB"
             headers["X-Title"] = "hardware internships watcher"
-        return self.http.post(f"{self.base_url}/chat/completions", json=payload, headers=headers, timeout=180)
+        return self.http.post(f"{self.base_url}/chat/completions", json=payload, headers=headers, timeout=self.timeout)
+
+    def _apply_json_mode(self, payload: dict) -> None:
+        payload.pop("response_format", None)
+        if self._json_mode == "schema":
+            payload["response_format"] = {"type": "json_schema",
+                                          "json_schema": {"name": "judgment", "strict": True, "schema": JUDGE_SCHEMA}}
+        elif self._json_mode == "object":
+            payload["response_format"] = {"type": "json_object"}
 
     def complete(self, user_text: str) -> tuple[str, str]:
         payload: dict[str, Any] = {
@@ -342,19 +355,26 @@ class OpenAICompatBackend:
                           + ", ".join(JUDGE_SCHEMA["properties"].keys()) + "."},
                          {"role": "user", "content": user_text}],
         }
-        if self._json_mode:
-            payload["response_format"] = {"type": "json_object"}
+        self._apply_json_mode(payload)
         for attempt in range(3):
-            resp = self._post(payload)
+            try:
+                resp = self._post(payload)
+            except Exception as exc:  # noqa: BLE001  (timeouts, connection resets)
+                if attempt < 2 and ("timed out" in str(exc).lower() or "timeout" in type(exc).__name__.lower()
+                                    or "connection" in str(exc).lower()):
+                    time.sleep(2)
+                    continue
+                raise JudgeError("transient", f"{self.name}: {str(exc)[:160]}") from exc
             if resp.status_code in (401, 403):
                 raise JudgeError("auth", f"{self.name}: API key rejected ({resp.status_code}) {resp.text[:160]}")
             if resp.status_code == 429:
                 wait = float(resp.headers.get("retry-after") or 15)
                 time.sleep(min(wait, 60))
                 continue
-            if resp.status_code == 400 and self._json_mode and "response_format" in resp.text:
-                self._json_mode = False          # provider/model does not support JSON mode; rely on the prompt
-                payload.pop("response_format", None)
+            if resp.status_code == 400 and self._json_mode != "none" and (
+                    "response_format" in resp.text or "json_schema" in resp.text or "schema" in resp.text.lower()):
+                self._json_mode = "object" if self._json_mode == "schema" else "none"   # downgrade and retry
+                self._apply_json_mode(payload)
                 continue
             if resp.status_code == 404 and self.name == "ollama":
                 raise JudgeError("auth", f"ollama: model {self.model!r} not found - run: ollama pull {self.model}")

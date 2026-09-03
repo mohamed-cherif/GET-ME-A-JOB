@@ -7,9 +7,9 @@
 
 companies:
   # --- custom career sites -------------------------------------------------
-  - {kind: tesla, company: Tesla}
+  - {kind: tesla, company: Tesla, enabled: false}          # tesla.com blocks datacenter IPs (403); covered by the feeds
   - {kind: amazon, company: Amazon}
-  - {kind: microsoft, company: Microsoft}
+  - {kind: microsoft, company: Microsoft, enabled: false}  # search endpoint changed; covered by the feeds
 
   # --- greenhouse (99) --------------------------------------------------
   - {kind: greenhouse, id: "10xgenomics", company: "10x Genomics", origin: feed}
@@ -21,7 +21,7 @@ companies:
   - {kind: greenhouse, id: "ampsortation", company: "Amp Robotics", origin: feed}
   - {kind: greenhouse, id: "andurilindustries", company: "Anduril", origin: curated}
   - {kind: greenhouse, id: "aperaaiinc", company: "Apera AI", origin: feed}
-  - {kind: greenhouse, id: "appliedintuition", company: "Applied Intuition", origin: curated}
+  - {kind: greenhouse, id: "appliedintuition", company: "Applied Intuition", origin: curated, enabled: false}   # board token not valid; fix the id or leave to auto-discovery
   - {kind: greenhouse, id: "apptronik", company: "Apptronik", origin: curated}
   - {kind: greenhouse, id: "archer", company: "Archer Aviation", origin: curated}
   - {kind: greenhouse, id: "asteralabs", company: "Astera Labs", origin: curated}
@@ -31,9 +31,9 @@ companies:
   - {kind: greenhouse, id: "cssmerge", company: "Atoms", origin: feed}
   - {kind: greenhouse, id: "axon", company: "Axon", origin: feed}
   - {kind: greenhouse, id: "axontalentcommunity", company: "Axon", origin: feed}
-  - {kind: greenhouse, id: "bostondynamics", company: "Boston Dynamics", origin: curated}
+  - {kind: greenhouse, id: "bostondynamics", company: "Boston Dynamics", origin: curated, enabled: false}   # board token not valid; fix the id or leave to auto-discovery
   - {kind: greenhouse, id: "calyxo", company: "Calyxo", origin: feed}
-  - {kind: greenhouse, id: "cerebras", company: "Cerebras", origin: curated}
+  - {kind: greenhouse, id: "cerebras", company: "Cerebras", origin: curated, enabled: false}   # board token not valid; fix the id or leave to auto-discovery
   - {kind: greenhouse, id: "didi", company: "DiDi Global", origin: feed}
   - {kind: greenhouse, id: "efficientcomputer", company: "Efficient Computer", origin: feed}
   - {kind: greenhouse, id: "eikontherapeutics", company: "Eikon Therapeutics", origin: feed}
@@ -43,7 +43,7 @@ companies:
   - {kind: greenhouse, id: "geotab", company: "Geotab", origin: feed}
   - {kind: greenhouse, id: "internshiplist2000", company: "Geotab", origin: feed}
   - {kind: greenhouse, id: "graphcore", company: "Graphcore", origin: feed}
-  - {kind: greenhouse, id: "groq", company: "Groq", origin: curated}
+  - {kind: greenhouse, id: "groq", company: "Groq", origin: curated, enabled: false}   # board token not valid; fix the id or leave to auto-discovery
   - {kind: greenhouse, id: "harbingermotors", company: "Harbinger Motors", origin: feed}
   - {kind: greenhouse, id: "hellbenderinc", company: "HELLBENDER", origin: feed}
   - {kind: greenhouse, id: "horacemannservicecorporation", company: "Horace Mann", origin: feed}
@@ -52,7 +52,7 @@ companies:
   - {kind: greenhouse, id: "impinjexternal", company: "Impinj", origin: curated}
   - {kind: greenhouse, id: "intrinsicrobotics", company: "Intrinsic", origin: feed}
   - {kind: greenhouse, id: "janestreet", company: "Jane Street", origin: feed}
-  - {kind: greenhouse, id: "jobyaviation", company: "Joby Aviation", origin: curated}
+  - {kind: greenhouse, id: "jobyaviation", company: "Joby Aviation", origin: curated, enabled: false}   # board token not valid; fix the id or leave to auto-discovery
   - {kind: greenhouse, id: "k2spacecorporation", company: "K2 Space", origin: curated}
   - {kind: greenhouse, id: "kodiak", company: "Kodiak Robotics", origin: curated}
   - {kind: greenhouse, id: "legendcareers", company: "Legend Biotech", origin: feed}
@@ -89,7 +89,7 @@ companies:
   - {kind: greenhouse, id: "seurat", company: "Seurat Technologies", origin: feed}
   - {kind: greenhouse, id: "sezzle", company: "Sezzle", origin: feed}
   - {kind: greenhouse, id: "sharkninjaoperatingllc", company: "SharkNinja", origin: feed}
-  - {kind: greenhouse, id: "sifive", company: "SiFive", origin: curated}
+  - {kind: greenhouse, id: "sifive", company: "SiFive", origin: curated, enabled: false}   # board token not valid; fix the id or leave to auto-discovery
   - {kind: greenhouse, id: "skhynixamerica", company: "SK hynix America", origin: curated}
   - {kind: greenhouse, id: "skyryse", company: "Skyryse", origin: feed}
   - {kind: greenhouse, id: "spacekinetic", company: "Space Kinetic", origin: feed}

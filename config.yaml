@@ -12,6 +12,7 @@ run:
   detail_fetch_limit: 150      # per cycle: extra per-posting requests (Workday/SmartRecruiters/Oracle descriptions)
   initial_max_age_days: 45     # first run only: don't notify about postings older than this (null = notify everything)
   auto_discover: true          # add boards discovered through the community feeds automatically
+  max_board_failures: 5        # a board that fails this many cycles in a row is parked (retried every 50 cycles)
   # Tiers: 🎯 target (fit score >= 75) and ✅ match (>= 55) are pushed the moment they appear.
   # 🟡 safety postings are collected and sent once a day as a single digest (Telegram: silent).
   digest_tiers: [safety]

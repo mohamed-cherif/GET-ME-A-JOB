@@ -73,6 +73,7 @@ class RunConfig:
     detail_fetch_limit: int = 150         # max per-job detail requests per cycle (Workday/SmartRecruiters/Oracle)
     initial_max_age_days: Optional[float] = 45.0  # on first run, skip notifying jobs older than this
     auto_discover: bool = True            # add boards found via aggregator feeds automatically
+    max_board_failures: int = 5           # park a board after this many consecutive failures (retry every 50 cycles)
     digest_tiers: list = field(default_factory=lambda: ["safety"])   # tiers batched into a daily digest
     digest_time: str = "13:00"            # UTC; 13:00 UTC = 9am New York
     digest_max_queue: int = 40            # flush early if this many pile up

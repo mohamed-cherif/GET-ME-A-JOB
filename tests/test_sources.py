@@ -138,3 +138,38 @@ class SourceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkdayRepairTests(unittest.TestCase):
+    def test_site_repaired_from_tenant_redirect(self):
+        class Resp:
+            def __init__(self, status, data=None, url=""):
+                self.status_code, self._data, self.url, self.text = status, data, url, ""
+            def json(self): return self._data
+            def raise_for_status(self):
+                if self.status_code >= 400: raise RuntimeError(f"HTTP {self.status_code}")
+
+        class Http(FakeHttp):
+            def get(self, url, **kw):
+                if url == "https://qualcomm.wd5.myworkdayjobs.com/":
+                    return Resp(200, url="https://qualcomm.wd5.myworkdayjobs.com/en-US/Qualcomm_Careers")
+                return Resp(200, {}, url=url)
+            def post(self, url, **kw):
+                if "/wday/cxs/qualcomm/External/jobs" in url:
+                    return Resp(422, {})
+                if "/wday/cxs/qualcomm/Qualcomm_Careers/jobs" in url:
+                    return Resp(200, {"total": 1, "jobPostings": [{"title": "RF Intern", "externalPath": "/job/SD/RF-Intern_JR1",
+                                                                    "locationsText": "San Diego, CA"}]})
+                return Resp(404, {})
+
+        class Store:
+            def __init__(self): self.d = {}
+            def get(self, k, default=None): return self.d.get(k, default)
+            def set(self, k, v): self.d[k] = v
+        src = build_source(Http({}), {"kind": "workday", "id": "qualcomm.wd5.myworkdayjobs.com|qualcomm|External", "company": "Qualcomm"})
+        src.store = Store()
+        jobs = src.fetch()
+        self.assertEqual([j.title for j in jobs], ["RF Intern"])
+        self.assertEqual(src.site, "Qualcomm_Careers")
+        self.assertEqual(jobs[0].url, "https://qualcomm.wd5.myworkdayjobs.com/Qualcomm_Careers/job/SD/RF-Intern_JR1")
+        self.assertEqual(src.store.get("workday-site:qualcomm.wd5.myworkdayjobs.com|qualcomm"), "Qualcomm_Careers")

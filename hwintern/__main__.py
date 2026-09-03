@@ -144,7 +144,9 @@ def cmd_boards(args, cfg):
     failing = {(b["kind"], b["ident"]): b for b in p.store.boards()}
     for s in sorted(srcs, key=lambda s: (s.kind, s.company.lower())):
         b = failing.get((s.kind, s.ident))
-        extra = f"  (failures={b['failures']} last={b['last_error']})" if b and b.get("failures") else ""
+        n = int(p.store.get(f"fail:{s.kind}:{s.ident}") or 0)
+        extra = f"  (failures={n}{', PARKED' if n >= cfg.run.max_board_failures else ''}" + \
+                (f" last={b['last_error']}" if b and b.get("last_error") else "") + ")" if n else ""
         print(f"{s.kind:16} {s.company:40} {s.ident}{extra}")
     print(f"{len(srcs)} sources")
     return 0
