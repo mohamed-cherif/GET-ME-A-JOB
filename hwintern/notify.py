@@ -298,6 +298,44 @@ class TelegramNotifier(Notifier):
     def send_text(self, text: str) -> None:
         self._send(self._esc(text))
 
+    def send_status(self, text: str) -> None:
+        """Quiet informational message (no sound)."""
+        self._send(text, silent=True)
+
+    def poll_commands(self, handler) -> int:
+        """Answer /commands the user sent to the bot since the last poll. handler(cmd, arg) -> reply text (HTML)."""
+        offset = int((self.store.get("telegram:update_offset") if self.store else None) or 0)
+        params = {"allowed_updates": '["message"]', "timeout": 0}
+        if offset:
+            params["offset"] = offset
+        resp = self.http.get(self._api("getUpdates"), params=params)
+        if resp.status_code >= 400:
+            return 0
+        updates = resp.json().get("result") or []
+        handled = 0
+        last_id = None
+        for u in updates:
+            last_id = u.get("update_id", last_id)
+            msg = u.get("message") or {}
+            text = (msg.get("text") or "").strip()
+            chat = str((msg.get("chat") or {}).get("id") or "")
+            if not text.startswith("/") or not chat:
+                continue
+            if self.store is not None and not self.store.get("telegram:chat_id"):
+                self.store.set("telegram:chat_id", chat)
+            cmd, _, arg = text[1:].partition(" ")
+            cmd = cmd.split("@", 1)[0].lower()
+            try:
+                reply = handler(cmd, arg.strip())
+            except Exception as exc:  # noqa: BLE001
+                reply = f"error: {self._esc(str(exc))}"
+            if reply:
+                self._send(reply, silent=True)
+                handled += 1
+        if last_id is not None and self.store is not None:
+            self.store.set("telegram:update_offset", str(last_id + 1))
+        return handled
+
 
 class SlackNotifier(Notifier):
     name = "slack"

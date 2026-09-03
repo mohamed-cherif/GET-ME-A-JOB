@@ -59,6 +59,9 @@ class Pipeline:
         self.notifiers = notifiers if notifiers is not None else build_notifiers(cfg.notifiers, self.http, self.store)
         self.dry_run = dry_run
         self._stop = False
+        self.last_report: Optional[CycleReport] = None
+        self.started_at = datetime.now(timezone.utc)
+        self.cycles = 0
 
     # -- sources ------------------------------------------------------------
     def sources(self) -> list[Source]:
@@ -256,6 +259,8 @@ class Pipeline:
         if first_run:
             self.store.mark_first_run_done()
         rep.duration_s = time.time() - t0
+        self.last_report = rep
+        self.cycles += 1
         log.info("cycle done: %s", rep.summary())
         if rep.errors:
             log.info("failing sources (%d): %s", len(rep.errors), ", ".join(sorted(rep.errors)))
@@ -302,6 +307,58 @@ class Pipeline:
                 by_key[job.key] = (job, ok, reason)
         return list(by_key.values())
 
+    # -- chat commands ------------------------------------------------------
+    def status_text(self) -> str:
+        from html import escape
+        rep = self.last_report
+        st = self.store.stats()
+        up = datetime.now(timezone.utc) - self.started_at
+        lines = [f"🟢 <b>watcher alive</b> · up {int(up.total_seconds() // 3600)}h{int(up.total_seconds() % 3600 // 60):02d}m · "
+                 f"{self.cycles} cycle(s) · every {self.cfg.run.interval_minutes:g} min"]
+        if rep:
+            age = int((datetime.now(timezone.utc) - rep.started).total_seconds() // 60)
+            lines.append(f"last cycle {age} min ago: {escape(rep.summary())}")
+            if rep.notified:
+                lines.append("sent: " + ", ".join(escape(f"{j.company} — {j.title}") for j in rep.notified[:5]))
+        lines.append(f"memory: {st['jobs_seen']} postings seen, {st['jobs_matched']} matched, "
+                     f"{len(self.store.digest_queue())} waiting for the digest")
+        lines.append(f"judge: {escape(self.judge.describe())}")
+        return "\n".join(lines)
+
+    def handle_command(self, cmd: str, arg: str = "") -> str:
+        from html import escape
+        if cmd in ("status", "start", "ping"):
+            return self.status_text()
+        if cmd == "last":
+            n = int(arg) if arg.isdigit() else 8
+            rows = self.store.matched_jobs(limit=n)
+            if not rows:
+                return "nothing matched yet"
+            return "\n".join(f"[{r.get('tier', '?')} {r.get('score', '')}] <b>{escape(r['company'])}</b> — "
+                              f"<a href=\"{r['url']}\">{escape(r['title'])}</a> ({escape(r['first_seen'][:16])})" for r in rows)
+        if cmd == "digest":
+            n = self.flush_digest(force=True)
+            return f"digest sent with {n} posting(s)" if n else "nothing queued for the digest"
+        if cmd == "help":
+            return "/status · /last [n] · /digest · /help"
+        return ""
+
+    def poll_commands(self) -> None:
+        for n in self.notifiers:
+            if hasattr(n, "poll_commands"):
+                try:
+                    n.poll_commands(self.handle_command)
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("command polling failed on %s: %s", n.name, exc)
+
+    def announce(self, text: str) -> None:
+        for n in self.notifiers:
+            if hasattr(n, "send_status"):
+                try:
+                    n.send_status(text)
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("status message failed on %s: %s", n.name, exc)
+
     # -- digest -------------------------------------------------------------
     def flush_digest(self, force: bool = False) -> int:
         """Send queued lower-tier postings once a day (at digest_time UTC) or when the queue is large."""
@@ -340,16 +397,25 @@ class Pipeline:
             except (ValueError, OSError):
                 pass
         interval = max(60.0, float(self.cfg.run.interval_minutes) * 60.0)
+        if not self.dry_run:
+            self.announce(f"🟢 watcher started · polling {len(self.sources())} boards every "
+                          f"{self.cfg.run.interval_minutes:g} min · judge: {self.judge.describe()} · send /status any time")
         while not self._stop:
             try:
                 self.run_once()
             except Exception as exc:  # noqa: BLE001
                 log.exception("cycle crashed: %s", exc)
+            if not self.dry_run:
+                self.poll_commands()
             sleep_for = interval + random.uniform(0, self.cfg.run.jitter_seconds)
             if deadline and time.time() + sleep_for > deadline:
                 log.info("max run time reached; exiting cleanly")
                 break
             log.info("next cycle in %.0fs", sleep_for)
             end = time.time() + sleep_for
+            next_poll = time.time() + 30
             while not self._stop and time.time() < end:
-                time.sleep(min(5.0, end - time.time()))
+                time.sleep(min(5.0, max(0.0, end - time.time())))
+                if not self.dry_run and time.time() >= next_poll:
+                    self.poll_commands()
+                    next_poll = time.time() + 30

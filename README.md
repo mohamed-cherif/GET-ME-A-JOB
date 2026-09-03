@@ -104,6 +104,19 @@ variable `LLM_MODEL` to the provider's current model id. `LLM_PROVIDER` forces a
 keys are set, and `provider: openai_compatible` + `LLM_BASE_URL` + `LLM_MODEL` works for vLLM, LM Studio
 or any other OpenAI-style endpoint.
 
+## Talking to the bot
+
+While the watcher runs, send these to your Telegram bot (answered within ~30 s, silently):
+
+| Command | Reply |
+|---|---|
+| `/status` | uptime, cycles, last cycle's numbers, what was sent, memory size, which LLM judge is active |
+| `/last [n]` | the last n matched postings with tier and score |
+| `/digest` | send the queued lower-tier postings now instead of waiting for the daily digest |
+
+Every time a run starts it also posts a quiet "🟢 watcher started" line, so a missing one after ~6 h means
+the Actions chain stopped (check the Actions tab, or wait for the hourly watchdog).
+
 ## Tiers: what buzzes your phone and what waits for the digest
 
 Every accepted posting gets a **fit score (0-100)** from: ⭐ priority keyword (+25), strong hardware

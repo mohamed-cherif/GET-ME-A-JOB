@@ -416,3 +416,34 @@ class ModelRetirementTests(unittest.TestCase):
 
 def json_dumps_judgment():
     return json.dumps(judgment())
+
+
+class TelegramCommandTests(unittest.TestCase):
+    def test_status_command_is_answered(self):
+        from hwintern.notify import build_notifiers
+        sent = []
+
+        def route(method, url, kw):
+            if "getUpdates" in url:
+                return {"ok": True, "result": [
+                    {"update_id": 7, "message": {"chat": {"id": 42}, "text": "hello"}},
+                    {"update_id": 8, "message": {"chat": {"id": 42}, "text": "/status@mybot"}}]}
+            if "sendMessage" in url:
+                sent.append(kw.get("json"))
+                return {"ok": True}
+            return FakeResponse({}, status=404)
+        http = FakeHttp({"api.telegram.org": route, "boards-api.greenhouse.io/v1/boards/acme/jobs": GH})
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_cfg(tmp, [{"kind": "greenhouse", "id": "acme", "company": "Acme"}])
+            store = Store(Path(tmp) / "db.sqlite3")
+            (tg,) = build_notifiers([{"type": "telegram", "bot_token": "t"}], http, store)
+            p = Pipeline(cfg, store=store, http=http, notifiers=[tg])
+            p.run_once()
+            p.poll_commands()
+            replies = [m for m in sent if "watcher alive" in m["text"]]
+            self.assertEqual(len(replies), 1)
+            self.assertTrue(replies[0]["disable_notification"])
+            self.assertIn("1 cycle", replies[0]["text"])
+            self.assertEqual(store.get("telegram:update_offset"), "9")
+            self.assertIn("/status", p.handle_command("help"))
+            self.assertIn("Acme", p.handle_command("last"))
