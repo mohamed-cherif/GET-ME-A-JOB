@@ -5,7 +5,7 @@
 # ---------------------------------------------------------------------------
 
 run:
-  interval_minutes: 5          # how often to poll every board when running with --loop
+  interval_minutes: 10          # how often to poll every board when running with --loop
   jitter_seconds: 20
   workers: 12                  # parallel HTTP workers
   request_timeout: 30
@@ -21,7 +21,7 @@ filters:
   target_terms: ["Summer 2027"]
   also_accept_terms: []
   accept_other_terms: true
-  reject_terms: ["Spring 2026", "Summer 2026", "Winter 2026"]
+  reject_terms: ["Spring 2026", "Summer 2026", "Winter 2026", "Fall 2026", "Fall 2027"]
   reject_years: [2023, 2024, 2025]
   accept_unknown_term: true
 
