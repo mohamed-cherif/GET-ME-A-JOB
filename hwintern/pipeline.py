@@ -50,7 +50,7 @@ class Pipeline:
         self.http = http or Http(timeout=cfg.run.request_timeout)
         self.store = store or Store(cfg.db_path)
         self.classifier = Classifier(cfg.filters)
-        self.notifiers = notifiers if notifiers is not None else build_notifiers(cfg.notifiers, self.http)
+        self.notifiers = notifiers if notifiers is not None else build_notifiers(cfg.notifiers, self.http, self.store)
         self.dry_run = dry_run
         self._stop = False
 

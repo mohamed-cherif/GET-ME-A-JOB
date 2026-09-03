@@ -78,6 +78,7 @@ class Notifier:
     def __init__(self, cfg: dict, http: Http):
         self.cfg = cfg
         self.http = http
+        self.store = None  # set by the pipeline / CLI; lets a channel persist small bits of state
 
     def send(self, jobs: list[Job]) -> None:  # pragma: no cover - interface
         raise NotImplementedError
@@ -172,11 +173,38 @@ class DiscordNotifier(Notifier):
 
 
 class TelegramNotifier(Notifier):
+    """Telegram bot. Setup: create a bot with @BotFather, open it in Telegram and press Start.
+    The chat id is discovered automatically from that first message (or set TELEGRAM_CHAT_ID)."""
     name = "telegram"
 
+    def _api(self, method: str) -> str:
+        return f"https://api.telegram.org/bot{self.cfg['bot_token']}/{method}"
+
+    def chat_id(self) -> str:
+        chat = str(self.cfg.get("chat_id") or "").strip()
+        if chat:
+            return chat
+        if self.store is not None:
+            cached = self.store.get("telegram:chat_id")
+            if cached:
+                return cached
+        resp = self.http.get(self._api("getUpdates"), params={"allowed_updates": '["message"]'})
+        resp.raise_for_status()
+        updates = resp.json().get("result") or []
+        for u in reversed(updates):
+            msg = u.get("message") or u.get("edited_message") or {}
+            cid = (msg.get("chat") or {}).get("id")
+            if cid is not None:
+                if self.store is not None:
+                    self.store.set("telegram:chat_id", str(cid))
+                log.info("telegram: using chat id %s (from %s)", cid, (msg.get("chat") or {}).get("username") or "your chat")
+                return str(cid)
+        raise RuntimeError("telegram: no chat id yet - open your bot in Telegram, press Start (send any message), "
+                           "then retry; or set TELEGRAM_CHAT_ID")
+
     def _send(self, text: str) -> None:
-        token, chat = self.cfg["bot_token"], self.cfg["chat_id"]
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        chat = self.chat_id()
+        url = self._api("sendMessage")
         payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
         for attempt in range(5):
             resp = self.http.post(url, json=payload)
@@ -325,12 +353,12 @@ NOTIFIERS = {c.name: c for c in (StdoutNotifier, FileNotifier, DiscordNotifier, 
                                  SlackNotifier, NtfyNotifier, EmailNotifier, WebhookNotifier)}
 
 _REQUIRED = {
-    "discord": ["webhook_url"], "telegram": ["bot_token", "chat_id"], "slack": ["webhook_url"],
+    "discord": ["webhook_url"], "telegram": ["bot_token"], "slack": ["webhook_url"],
     "ntfy": ["topic"], "email": ["to_addr", "username", "password"], "webhook": ["url"],
 }
 
 
-def build_notifiers(entries: list[dict], http: Http) -> list[Notifier]:
+def build_notifiers(entries: list[dict], http: Http, store=None) -> list[Notifier]:
     out: list[Notifier] = []
     for e in entries:
         kind = (e.get("type") or "").lower()
@@ -342,7 +370,9 @@ def build_notifiers(entries: list[dict], http: Http) -> list[Notifier]:
         if missing:
             log.warning("notifier %s skipped: missing %s (set the env var or config key)", kind, ", ".join(missing))
             continue
-        out.append(cls(e, http))
+        n = cls(e, http)
+        n.store = store
+        out.append(n)
     return out
 
 

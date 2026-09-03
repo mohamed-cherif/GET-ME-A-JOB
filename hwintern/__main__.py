@@ -36,7 +36,7 @@ def cmd_run(args, cfg):
 
 def cmd_test_notify(args, cfg):
     http = Http()
-    ns = build_notifiers(cfg.notifiers, http)
+    ns = build_notifiers(cfg.notifiers, http, Store(cfg.db_path))
     if not ns:
         print("no notifiers configured (check config.yaml and env vars)", file=sys.stderr)
         return 1

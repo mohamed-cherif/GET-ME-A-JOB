@@ -102,3 +102,35 @@ class PipelineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TelegramTests(unittest.TestCase):
+    def test_chat_id_autodetected_and_cached(self):
+        from hwintern.notify import build_notifiers
+        from hwintern.store import Store
+        sent = []
+
+        def route(method, url, kw):
+            if "getUpdates" in url:
+                return {"ok": True, "result": [{"update_id": 1, "message": {"chat": {"id": 42, "username": "mo"}, "text": "/start"}}]}
+            if "sendMessage" in url:
+                sent.append(kw.get("json"))
+                return {"ok": True}
+            return FakeResponse({}, status=404)
+        http = FakeHttp({"api.telegram.org": route})
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / "db.sqlite3")
+            (n,) = build_notifiers([{"type": "telegram", "bot_token": "t", "chat_id": ""}], http, store)
+            n.send_text("hello")
+            self.assertEqual(sent[0]["chat_id"], "42")
+            self.assertEqual(store.get("telegram:chat_id"), "42")
+            n.send_text("again")
+            self.assertEqual(sum(1 for m, u in http.calls if "getUpdates" in u), 1)  # cached
+
+    def test_missing_chat_id_gives_clear_error(self):
+        from hwintern.notify import build_notifiers
+        http = FakeHttp({"getUpdates": {"ok": True, "result": []}})
+        (n,) = build_notifiers([{"type": "telegram", "bot_token": "t"}], http)
+        with self.assertRaises(RuntimeError) as ctx:
+            n.send_text("x")
+        self.assertIn("press Start", str(ctx.exception))

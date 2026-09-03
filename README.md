@@ -29,7 +29,7 @@ cd hardware-internships-scraper
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 
-cp .env.example .env         # fill in at least one channel (Discord webhook is the easiest)
+cp .env.example .env         # fill in at least one channel (Telegram bot token is the easiest)
 set -a; . ./.env; set +a     # export the variables for this shell
 python -m hwintern test-notify          # every configured channel should say "ok"
 
@@ -45,9 +45,9 @@ truly new openings.
 
 | Channel | Setup |
 |---|---|
-| **ntfy** (fastest) | Install the ntfy app, subscribe to a long random topic, set `NTFY_TOPIC`. |
+| **Telegram** | `@BotFather` → `/newbot` → token into `TELEGRAM_BOT_TOKEN`. Open the bot, press Start. Chat id is auto-detected. |
 | **Discord** | Server → Settings → Integrations → Webhooks → copy URL into `DISCORD_WEBHOOK_URL`. Turn on push for that channel. |
-| **Telegram** | `@BotFather` → `/newbot` → token. Message your bot once, read your chat id from `https://api.telegram.org/bot<TOKEN>/getUpdates`. |
+| **ntfy** | Install the ntfy app, subscribe to a long random topic, set `NTFY_TOPIC`. |
 | Slack / email / webhook | See `.env.example`. |
 
 ## Running it 24/7
@@ -63,8 +63,8 @@ free-tier cloud VM).
 
 **Option B - zero infrastructure (GitHub Actions):** `.github/workflows/hardware-internships.yml`
 runs the poll every 5 minutes and keeps the seen-jobs database in the Actions cache. Add your channel
-secrets under *Settings → Secrets and variables → Actions* (`DISCORD_WEBHOOK_URL`, `NTFY_TOPIC`,
-`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`, …) and enable the workflow. GitHub may delay scheduled runs
+secrets under *Settings → Secrets and variables → Actions* (`TELEGRAM_BOT_TOKEN`, or `DISCORD_WEBHOOK_URL`,
+`NTFY_TOPIC`, …) and enable the workflow. GitHub may delay scheduled runs
 by a few minutes when runners are busy, so Option A is tighter.
 
 ## Current personal settings (already in `config.yaml`)
@@ -80,11 +80,16 @@ by a few minutes when runners are busy, so Option A is tighter.
 
 ## Setting up the phone channels
 
-**Discord (recommended, free, instant push):**
-1. In Discord create a server just for you (the "+" button in the left bar, "Create My Own").
-2. Right-click the text channel → *Edit channel* → *Integrations* → *Webhooks* → *New Webhook* → *Copy Webhook URL*.
-3. Put it in `.env` as `DISCORD_WEBHOOK_URL=` (or as a GitHub Actions secret). Turn on push notifications for that channel in the Discord app.
-4. `python -m hwintern test-notify` should post a test message.
+**Telegram (primary):**
+1. In Telegram talk to `@BotFather`, send `/newbot`, copy the token it gives you.
+2. Open your new bot's chat and press **Start** (or send it any message). That is all: the watcher
+   reads the chat id from that message on its first run and remembers it.
+3. Put the token in `.env` as `TELEGRAM_BOT_TOKEN=` (or as the GitHub Actions secret of the same name).
+4. `python -m hwintern test-notify` should deliver a test message. If it says "no chat id yet", you
+   have not pressed Start on the bot; do that and retry. `TELEGRAM_CHAT_ID` can be set explicitly too.
+
+**Discord:** create a private server, right-click the channel → *Edit channel* → *Integrations* →
+*Webhooks* → *New Webhook* → copy the URL into `DISCORD_WEBHOOK_URL`.
 
 **ntfy (zero-signup push):** install the ntfy app, subscribe to a long random topic, set `NTFY_TOPIC`.
 

@@ -55,14 +55,14 @@ notifiers:
   - type: stdout
   - type: file                 # appends to state/NEW_JOBS.md and state/new_jobs.jsonl
     path: state
+  - type: telegram             # primary channel. Open your bot, press Start; chat id is auto-detected.
+    enabled: true
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    chat_id: ${TELEGRAM_CHAT_ID:-}
   - type: discord
     enabled: true
     webhook_url: ${DISCORD_WEBHOOK_URL}
     mention: ${DISCORD_MENTION:-}        # e.g. "@everyone" or "<@123456789>"
-  - type: telegram
-    enabled: true
-    bot_token: ${TELEGRAM_BOT_TOKEN}
-    chat_id: ${TELEGRAM_CHAT_ID}
   - type: ntfy                 # phone push with zero signup: install the ntfy app, subscribe to your topic
     enabled: true
     topic: ${NTFY_TOPIC}
