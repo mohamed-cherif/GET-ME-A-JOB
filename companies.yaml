@@ -224,7 +224,7 @@ companies:
   - {kind: workday, id: "allegromicro.wd5.myworkdayjobs.com|allegromicro|allegrocareers", company: "Allegro MicroSystems", origin: feed}
   - {kind: workday, id: "altera.wd1.myworkdayjobs.com|altera|altera", company: "Altera", origin: curated}
   - {kind: workday, id: "ambarella.wd108.myworkdayjobs.com|ambarella|ambarella", company: "Ambarella", origin: curated}
-  - {kind: workday, id: "amd.wd1.myworkdayjobs.com|amd|External", company: "AMD", origin: curated}
+  - {kind: workday, id: "amd.wd1.myworkdayjobs.com|amd|External", company: "AMD", origin: curated, enabled: false}   # site name unknown (page 500s); covered by the community feeds
   - {kind: workday, id: "pae.wd1.myworkdayjobs.com|pae|amentum_careers", company: "Amentum", origin: feed}
   - {kind: workday, id: "american.wd1.myworkdayjobs.com|american|au", company: "American University", origin: feed}
   - {kind: workday, id: "analogdevices.wd1.myworkdayjobs.com|analogdevices|External", company: "Analog Devices", origin: curated}
@@ -342,7 +342,7 @@ companies:
   - {kind: workday, id: "kla.wd1.myworkdayjobs.com|kla|search", company: "KLA", origin: curated}
   - {kind: workday, id: "kla.wd1.myworkdayjobs.com|kla|Search", company: "KLA", origin: feed}
   - {kind: workday, id: "kla.wd1.myworkdayjobs.com|kla|UR", company: "KLA (University)", origin: curated}
-  - {kind: workday, id: "lamresearch.wd1.myworkdayjobs.com|lamresearch|LamCareers", company: "Lam Research", origin: curated}
+  - {kind: workday, id: "lamresearch.wd1.myworkdayjobs.com|lamresearch|LamCareers", company: "Lam Research", origin: curated, enabled: false}   # site name unknown (page 500s); covered by the community feeds
   - {kind: workday, id: "milestone.wd1.myworkdayjobs.com|milestone|Milestone_External", company: "Legrand", origin: feed}
   - {kind: workday, id: "leidos.wd5.myworkdayjobs.com|leidos|External", company: "Leidos", origin: curated}
   - {kind: workday, id: "leonardocompany.wd3.myworkdayjobs.com|leonardocompany|LeonardoCareerSite", company: "Leonardo", origin: feed}
@@ -398,7 +398,7 @@ companies:
   - {kind: workday, id: "plexus.wd5.myworkdayjobs.com|plexus|Plexus_Careers", company: "Plexus", origin: feed}
   - {kind: workday, id: "plugpower.wd5.myworkdayjobs.com|plugpower|Plug_Power_Inc", company: "Plug Power", origin: feed}
   - {kind: workday, id: "qtsdatacenters.wd5.myworkdayjobs.com|qtsdatacenters|qts", company: "QTS", origin: feed}
-  - {kind: workday, id: "qualcomm.wd5.myworkdayjobs.com|qualcomm|External", company: "Qualcomm", origin: curated}
+  - {kind: workday, id: "qualcomm.wd5.myworkdayjobs.com|qualcomm|External", company: "Qualcomm", origin: curated, enabled: false}   # site name unknown (page 500s); covered by the community feeds
   - {kind: workday, id: "radiancetech.wd12.myworkdayjobs.com|radiancetech|Radiance_External", company: "Radiance Technologies", origin: feed}
   - {kind: workday, id: "vhr-otsuka.wd1.myworkdayjobs.com|vhr-otsuka|RecorExternal", company: "ReCor Medical", origin: feed}
   - {kind: workday, id: "redbulltechnology.wd3.myworkdayjobs.com|redbulltechnology|RB_Racing", company: "Red Bull Advanced Technologies", origin: feed}
