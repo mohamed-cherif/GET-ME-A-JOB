@@ -1,32 +1,42 @@
-# Runs the watcher continuously on GitHub's servers.
+# Two modes in one workflow:
 #
-# GitHub's cron scheduler is unreliable for short intervals (it frequently skips */5 runs), so instead
-# each job runs the watcher in a loop for ~5.5 hours (GitHub's per-job limit is 6h), saves its memory
-# of seen postings to the Actions cache, and then dispatches the next run of itself. An hourly cron
-# only acts as a watchdog that restarts the chain if a run ever dies.
+#   scheduled (default)  - runs ONE polling cycle twice a day (see cron below). Cheap: a few Actions
+#                          minutes per day, fine for a private repo's free tier. Postings are found
+#                          within hours of going live.
+#   continuous           - "Run workflow" with continuous = true: loops for ~5.5 h, saves state, then
+#                          dispatches itself again, forever (GitHub's per-job limit is 6 h). Real-time,
+#                          but ~44,000 Actions minutes a month: only for a public repo or a paid plan.
+#                          To stop it: cancel the running job in the Actions tab.
 #
 # Secrets (Settings -> Secrets and variables -> Actions): TELEGRAM_BOT_TOKEN (or another channel), and one
-# LLM key for the judge: GROQ_API_KEY (free), GEMINI_API_KEY (free), ANTHROPIC_API_KEY, ... Or set the
-# repository *variable* OLLAMA_MODEL (e.g. qwen2.5:3b) to run a small open model on the runner itself.
+# LLM key for the judge: GEMINI_API_KEY / GROQ_API_KEY (free) / ANTHROPIC_API_KEY ...
+# The seen-postings memory lives in the Actions cache and survives between runs.
 name: hardware-internships-watch
 
 on:
   schedule:
-    - cron: "7 * * * *"          # watchdog: restart the chain if nothing is running
+    # cron is UTC. 13:00 UTC = 9:00 New York (EDT); 22:00 UTC = 18:00 New York.
+    # GitHub may delay scheduled runs by some minutes; that is fine at this cadence.
+    - cron: "0 13 * * *"
+    - cron: "0 22 * * *"
   workflow_dispatch:
     inputs:
+      continuous:
+        description: "Run 24/7 (loop ~5.5h and re-dispatch) instead of a single cycle"
+        type: boolean
+        default: false
       dry_run:
-        description: "Classify only, do not notify, exit after one cycle"
+        description: "Classify only, do not notify"
         type: boolean
         default: false
 
 concurrency:
   group: hardware-internships-watch
-  cancel-in-progress: false     # a queued run simply waits for the running one to finish
+  cancel-in-progress: false     # a scheduled run just waits if a continuous run is active
 
 permissions:
   contents: read
-  actions: write                # save the cache + dispatch the next run
+  actions: write                # save the cache + (continuous mode) dispatch the next run
 
 jobs:
   watch:
@@ -73,7 +83,7 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://localhost:11434/api/tags >/dev/null && break; sleep 1; done
           ollama pull "${{ vars.OLLAMA_MODEL }}"
 
-      - name: Watch (continuous loop, ~5.5h)
+      - name: Watch
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -101,8 +111,10 @@ jobs:
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             python -m hwintern run --dry-run
-          else
+          elif [ "${{ inputs.continuous }}" = "true" ]; then
             python -m hwintern run --loop --max-minutes 335
+          else
+            python -m hwintern run
           fi
 
       - name: Save seen-jobs database
@@ -123,8 +135,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      - name: Start the next run
-        if: success() && inputs.dry_run != true
+      - name: Start the next continuous run
+        if: success() && inputs.continuous == true && inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run hardware-internships.yml --ref main
+        run: gh workflow run hardware-internships.yml --ref main -f continuous=true

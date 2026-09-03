@@ -62,12 +62,13 @@ or without Docker: `deploy/hw-internships-watcher.service` (systemd, works on a 
 free-tier cloud VM).
 
 **Option B - zero infrastructure (GitHub Actions, the default here):** `.github/workflows/hardware-internships.yml`
-runs the watcher **continuously**: each job loops for about 5.5 hours (GitHub's per-job limit is 6), saves
-its memory of seen postings to the Actions cache, then dispatches the next run of itself. An hourly cron is
-only a watchdog that restarts the chain if a run dies. This avoids GitHub's cron scheduler, which routinely
-skips short intervals. Add your secrets under *Settings → Secrets and variables → Actions*
-(`TELEGRAM_BOT_TOKEN`, `ANTHROPIC_API_KEY`, …), then start the chain once from the Actions tab with
-"Run workflow". `run.interval_minutes` in `config.yaml` sets the polling cadence inside the loop.
+runs one polling cycle **twice a day** (9:00 and 18:00 New York; edit the two `cron` lines, they are in
+UTC). That costs a few Actions minutes per day, well inside a private repo's free tier, and finds new
+postings within hours. For true real-time, start the **continuous** mode instead: Actions tab →
+"Run workflow" → tick *continuous*. It then loops for ~5.5 h per job and re-dispatches itself forever,
+which needs a public repo or a paid plan (~44,000 minutes a month); cancel the running job to stop it.
+Add your secrets under *Settings → Secrets and variables → Actions* (`TELEGRAM_BOT_TOKEN`,
+`GEMINI_API_KEY`, …). The seen-postings memory is kept in the Actions cache between runs.
 
 ## The LLM judge (why the junk stops)
 
@@ -114,8 +115,8 @@ While the watcher runs, send these to your Telegram bot (answered within ~30 s, 
 | `/last [n]` | the last n matched postings with tier and score |
 | `/digest` | send the queued lower-tier postings now instead of waiting for the daily digest |
 
-Every time a run starts it also posts a quiet "🟢 watcher started" line, so a missing one after ~6 h means
-the Actions chain stopped (check the Actions tab, or wait for the hourly watchdog).
+In continuous mode every run start also posts a quiet "🟢 watcher started" line. In the twice-a-day
+mode, commands are answered at the next scheduled run.
 
 ## Tiers: what buzzes your phone and what waits for the digest
 

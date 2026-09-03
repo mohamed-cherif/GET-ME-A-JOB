@@ -28,6 +28,8 @@ def cmd_run(args, cfg):
         p.run_forever(max_minutes=args.max_minutes)
     else:
         rep = p.run_once()
+        if not args.dry_run:
+            p.poll_commands()
         print(rep.summary())
         if rep.notified:
             print(f"notified {len(rep.notified)} job(s)")
