@@ -91,7 +91,7 @@ sets the tier, and the judge's one-line summary is shown in the notification.
 
 | Provider | Key / setup | Notes |
 |---|---|---|
-| **Groq** (recommended free) | console.groq.com → API key → `GROQ_API_KEY` | Free tier, no card, very fast, Llama 3.3 70B. Plenty for a few hundred judgments a day. |
+| **Groq** (recommended free) | console.groq.com → API key → `GROQ_API_KEY` | Free tier, no card, very fast, Llama 70B class. Thousands of requests a day. |
 | **Google Gemini** | aistudio.google.com → API key → `GEMINI_API_KEY` | Free tier, Gemini Flash (`gemini-3.6-flash`). |
 | **Cerebras** | cloud.cerebras.ai → `CEREBRAS_API_KEY` | Free tier, Llama 3.3 70B. |
 | **OpenRouter** | openrouter.ai → `OPENROUTER_API_KEY` | Uses `:free` models; small daily quota without credits. |
@@ -100,7 +100,7 @@ sets the tier, and the judge's one-line summary is shown in the notification.
 | **Ollama on the GitHub runner** | set the repository *variable* `OLLAMA_MODEL` to `qwen2.5:3b` (or `llama3.2:3b`) | No key at all. The runner has no GPU, so a 3B model takes ~30-60 s per posting; fine inside the continuous loop, but judgments are noticeably weaker than the 70B options. |
 | Anthropic (paid) | `ANTHROPIC_API_KEY` | Best quality (`claude-opus-5`), about a cent or two per posting. |
 
-Model names drift; if a preset's default is retired, set `LLM_MODEL` (locally) or the repository
+Set several keys and the judge fails over automatically in the order of `llm.providers` (a provider whose quota is exhausted is skipped for the rest of the run). If a preset's default model is retired the judge asks the provider for its model list and picks a capable one. Model names drift; if that guess is wrong, set `LLM_MODEL` (locally) or the repository
 variable `LLM_MODEL` to the provider's current model id. `LLM_PROVIDER` forces a provider when several
 keys are set, and `provider: openai_compatible` + `LLM_BASE_URL` + `LLM_MODEL` works for vLLM, LM Studio
 or any other OpenAI-style endpoint.

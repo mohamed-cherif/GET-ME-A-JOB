@@ -75,6 +75,9 @@ llm:
   # OPENROUTER_API_KEY (":free" models), MISTRAL_API_KEY (free tier), or a local Ollama server.
   # Force one with LLM_PROVIDER; override the model with LLM_MODEL (see README "Free LLM options").
   provider: ${LLM_PROVIDER:-auto}
+  # Failover: every provider with a key is tried in this order; one whose quota is exhausted or key
+  # rejected is skipped for the rest of the run. Gemini's free tier is tiny (~20 requests/day), Groq's is large.
+  providers: [groq, cerebras, openrouter, mistral, anthropic, gemini, ollama]
   model: ${LLM_MODEL:-}
   base_url: ${LLM_BASE_URL:-}     # only for provider: openai_compatible (vLLM, LM Studio, ...)
   api_key: ${LLM_API_KEY:-}

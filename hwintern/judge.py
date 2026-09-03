@@ -102,6 +102,7 @@ AUTO_ORDER = ["anthropic", "groq", "gemini", "cerebras", "openrouter", "mistral"
 class LLMConfig:
     enabled: bool = True
     provider: str = "auto"           # auto | anthropic | groq | gemini | cerebras | openrouter | mistral | ollama | openai_compatible
+    providers: list[str] = field(default_factory=list)   # explicit failover order, e.g. [groq, gemini]; empty = every provider with a key
     model: str = ""                  # empty = provider default
     base_url: str = ""               # only for openai_compatible / to override a preset
     api_key: str = ""                # only for openai_compatible (or to override the env var)
@@ -158,22 +159,38 @@ class JudgeError(Exception):
         self.kind = kind
 
 
-def resolve_provider(cfg: LLMConfig) -> tuple[str, str, str, str]:
+def _has_credentials(name: str, cfg: LLMConfig) -> bool:
+    import os
+    preset = PROVIDERS.get(name)
+    if not preset:
+        return False
+    if name == "ollama":
+        return bool(os.environ.get("OLLAMA_HOST") or cfg.base_url or _ollama_alive(""))
+    if name == "openai_compatible":
+        return bool(cfg.base_url and (cfg.api_key or os.environ.get("LLM_API_KEY")))
+    return bool(cfg.api_key or (preset["key_env"] and os.environ.get(preset["key_env"])))
+
+
+def candidate_providers(cfg: LLMConfig) -> list[str]:
+    """Providers to try, in failover order."""
+    if cfg.providers:
+        return [p.lower() for p in cfg.providers if _has_credentials(p.lower(), cfg)]
+    name = (cfg.provider or "auto").lower()
+    if name != "auto":
+        return [name]
+    return [c for c in AUTO_ORDER if _has_credentials(c, cfg)]
+
+
+def resolve_provider(cfg: LLMConfig, name: str = "") -> tuple[str, str, str, str]:
     """Return (provider, base_url, model, api_key) or raise JudgeError('auth')."""
     import os
-    name = (cfg.provider or "auto").lower()
+    name = (name or cfg.provider or "auto").lower()
     if name == "auto":
-        for cand in AUTO_ORDER:
-            preset = PROVIDERS[cand]
-            if preset["key_env"] and os.environ.get(preset["key_env"]):
-                name = cand
-                break
-            if cand == "ollama" and (os.environ.get("OLLAMA_HOST") or _ollama_alive(cfg.base_url)):
-                name = "ollama"
-                break
-        else:
-            raise JudgeError("auth", "no LLM credentials found: set ANTHROPIC_API_KEY, GROQ_API_KEY, GEMINI_API_KEY, "
-                                     "CEREBRAS_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, or run Ollama locally")
+        cands = candidate_providers(cfg)
+        if not cands:
+            raise JudgeError("auth", "no LLM credentials found: set GROQ_API_KEY, GEMINI_API_KEY, CEREBRAS_API_KEY, "
+                                     "OPENROUTER_API_KEY, MISTRAL_API_KEY, ANTHROPIC_API_KEY, or run Ollama locally")
+        name = cands[0]
     preset = PROVIDERS.get(name)
     if preset is None:
         raise JudgeError("auth", f"unknown llm.provider {name!r}")
@@ -183,7 +200,8 @@ def resolve_provider(cfg: LLMConfig) -> tuple[str, str, str, str]:
         host = _os.environ.get("OLLAMA_HOST")
         if host and not cfg.base_url:
             base_url = host.rstrip("/") + ("" if host.rstrip("/").endswith("/v1") else "/v1")
-    model = cfg.model or preset["model"]
+    # llm.model applies only to a single, explicitly chosen provider; in failover mode each preset keeps its own
+    model = (cfg.model if (cfg.provider or "auto").lower() == name else "") or preset["model"]
     api_key = cfg.api_key or (os.environ.get(preset["key_env"]) if preset["key_env"] else "") or ""
     if name == "ollama" and not api_key:
         api_key = "ollama"
@@ -341,6 +359,30 @@ class OpenAICompatBackend:
             headers["X-Title"] = "hardware internships watcher"
         return self.http.post(f"{self.base_url}/chat/completions", json=payload, headers=headers, timeout=self.timeout)
 
+    _MODEL_PREFS = [r"llama-3\.3-70b", r"llama-4.*(scout|maverick)", r"gpt-oss-120b", r"qwen3-?(32|235)b", r"gemini.*flash(?!.*lite)",
+                    r"gemini.*flash", r"llama-3\.1-70b", r"mistral-small", r"llama.*70b", r"qwen.*(7|8|14|32)b",
+                    r"llama.*8b", r"gpt-oss-20b"]
+
+    def _pick_live_model(self) -> str:
+        """Ask the provider which models exist and choose a capable, cheap one."""
+        try:
+            if not hasattr(self.http, "get"):
+                return ""
+            resp = self.http.get(f"{self.base_url}/models", headers={"Authorization": f"Bearer {self.api_key}"}, timeout=30)
+            if resp.status_code >= 400:
+                return ""
+            data = resp.json()
+            ids = [m.get("id") or m.get("name") or "" for m in (data.get("data") or data.get("models") or [])]
+            ids = [i.split("/", 1)[-1] if i.startswith("models/") else i for i in ids if i]
+        except Exception:  # noqa: BLE001
+            return ""
+        for pat in self._MODEL_PREFS:
+            rx = re.compile(pat, re.I)
+            hits = [i for i in ids if rx.search(i) and not re.search(r"vision|audio|tts|embed|guard|whisper|image|preview", i, re.I)]
+            if hits:
+                return sorted(hits, key=len)[0]
+        return ""
+
     def _apply_json_mode(self, payload: dict) -> None:
         payload.pop("response_format", None)
         if self._json_mode == "schema":
@@ -370,8 +412,11 @@ class OpenAICompatBackend:
             if resp.status_code in (401, 403):
                 raise JudgeError("auth", f"{self.name}: API key rejected ({resp.status_code}) {resp.text[:160]}")
             if resp.status_code == 429:
+                body = resp.text.lower()
+                if any(w in body for w in ("per day", "daily", "quota exceeded", "requests per day", "rpd", "exhausted", "billing")):
+                    raise JudgeError("ratelimit", f"{self.name}: daily quota exhausted ({resp.text[:120]})")
                 wait = float(resp.headers.get("retry-after") or 15)
-                time.sleep(min(wait, 60))
+                time.sleep(min(wait, 30))
                 continue
             if resp.status_code == 400 and self._json_mode != "none" and (
                     "response_format" in resp.text or "json_schema" in resp.text or "schema" in resp.text.lower()):
@@ -383,7 +428,7 @@ class OpenAICompatBackend:
             if resp.status_code in (400, 404) and "model" in resp.text.lower():
                 # Providers retire model names and often name the replacement in the error text
                 # ("... please use models/gemini-x-flash ..."). Follow the hint once, otherwise give up clearly.
-                hinted = _suggested_model(resp.text)
+                hinted = _suggested_model(resp.text) or self._pick_live_model()
                 if hinted and hinted != self.model and not self._switched:
                     log.warning("%s: model %r unavailable; switching to %r as suggested by the provider", self.name, self.model, hinted)
                     self.model = payload["model"] = hinted
@@ -408,14 +453,32 @@ class OpenAICompatBackend:
         raise JudgeError("ratelimit", f"{self.name}: rate limited / unavailable")
 
 
-def build_backend(cfg: LLMConfig, system_text: str, client: Any = None, http: Any = None):
+def build_backend(cfg: LLMConfig, system_text: str, client: Any = None, http: Any = None, name: str = ""):
     if client is not None:  # an injected Anthropic client (tests) needs no credential lookup
         return AnthropicBackend(cfg, system_text, client=client)
-    provider, base_url, model, api_key = resolve_provider(cfg)
+    provider, base_url, model, api_key = resolve_provider(cfg, name)
     if provider == "anthropic":
-        b = AnthropicBackend(cfg, system_text, client=client)
-        return b
+        return AnthropicBackend(cfg, system_text, client=client)
     return OpenAICompatBackend(provider, base_url, model, api_key, system_text, cfg.temperature, http=http)
+
+
+def build_backends(cfg: LLMConfig, system_text: str, client: Any = None, http: Any = None) -> list:
+    """Every usable provider, in failover order. Raises JudgeError('auth') when there is none."""
+    if client is not None:
+        return [AnthropicBackend(cfg, system_text, client=client)]
+    names = candidate_providers(cfg)
+    if not names:
+        raise JudgeError("auth", "no LLM credentials found: set GROQ_API_KEY, GEMINI_API_KEY, CEREBRAS_API_KEY, "
+                                 "OPENROUTER_API_KEY, MISTRAL_API_KEY, ANTHROPIC_API_KEY, or run Ollama locally")
+    out = []
+    for n in names:
+        try:
+            out.append(build_backend(cfg, system_text, http=http, name=n))
+        except JudgeError as exc:
+            log.warning("LLM provider %s skipped: %s", n, exc)
+    if not out:
+        raise JudgeError("auth", "no usable LLM provider")
+    return out
 
 
 class LLMJudge:
@@ -429,24 +492,34 @@ class LLMJudge:
         self.disabled_reason = ""
         self.system_text = SYSTEM_TEMPLATE.format(profile=cfg.profile.strip())
 
-    # -- backend ------------------------------------------------------------
+    # -- backends (failover chain) -------------------------------------------
     @property
-    def backend(self):
+    def backends(self) -> list:
         if self._backend is None and not self.disabled_reason:
             try:
-                self._backend = build_backend(self.cfg, self.system_text, client=self._client, http=self._http)
-                log.info("LLM judge: provider %s, model %s", self._backend.name, self._backend.model)
+                self._backend = build_backends(self.cfg, self.system_text, client=self._client, http=self._http)
+                self._dead: dict = {}       # backend name -> reason (exhausted / bad key) for this process
+                log.info("LLM judge: %s", " -> ".join(f"{b.name}/{b.model}" for b in self._backend))
             except JudgeError as exc:
                 self.disabled_reason = str(exc)
-        return self._backend
+                self._backend = []
+        return self._backend or []
+
+    @property
+    def backend(self):
+        live = [b for b in self.backends if b.name not in getattr(self, "_dead", {})]
+        return live[0] if live else None
 
     @property
     def available(self) -> bool:
         return self.cfg.enabled and not self.disabled_reason and self.backend is not None
 
     def describe(self) -> str:
-        b = self.backend
-        return f"{b.name} / {b.model}" if b else f"unavailable: {self.disabled_reason}"
+        bs = self.backends
+        if not bs:
+            return f"unavailable: {self.disabled_reason}"
+        dead = getattr(self, "_dead", {})
+        return " -> ".join(f"{b.name} / {b.model}" + (f" (skipped: {dead[b.name]})" if b.name in dead else "") for b in bs)
 
     # -- cache --------------------------------------------------------------
     def cached(self, job: Job) -> Optional[dict]:
@@ -470,18 +543,33 @@ class LLMJudge:
             return Judgment(False, error="per-cycle budget exhausted")
         user_text = build_user_message(job, self.cfg.max_description_chars)
         self.calls += 1
-        try:
-            text, model = self.backend.complete(user_text)
-        except JudgeError as exc:
-            if exc.kind == "auth":
-                self.disabled_reason = str(exc)
-                log.error("LLM judge disabled: %s", self.disabled_reason)
-            else:
-                log.warning("LLM judge %s for %s: %s", exc.kind, job.url, exc)
-            return Judgment(False, error=str(exc))
-        except Exception as exc:  # noqa: BLE001
-            log.warning("LLM judge failed for %s: %s", job.url, exc)
-            return Judgment(False, error=str(exc)[:200])
+        text = model = None
+        last_error = "no provider"
+        for backend in self.backends:
+            if backend.name in self._dead:
+                continue
+            try:
+                text, model = backend.complete(user_text)
+                break
+            except JudgeError as exc:
+                last_error = f"{backend.name}: {exc}"
+                if exc.kind in ("auth", "ratelimit"):
+                    # bad key or quota exhausted: stop using this provider for the rest of the run, try the next one
+                    self._dead[backend.name] = "quota exhausted" if exc.kind == "ratelimit" else "key rejected"
+                    log.warning("LLM provider %s unavailable (%s); %s", backend.name, exc,
+                                "failing over" if self.backend else "no other provider configured")
+                else:
+                    log.warning("LLM judge %s on %s for %s: %s", exc.kind, backend.name, job.url, exc)
+                    if exc.kind == "bad_request":
+                        break      # not the provider's fault; another provider would fail the same way
+            except Exception as exc:  # noqa: BLE001
+                last_error = f"{backend.name}: {str(exc)[:160]}"
+                log.warning("LLM judge failed on %s for %s: %s", backend.name, job.url, exc)
+        if text is None:
+            if not self.backend:
+                self.disabled_reason = f"all LLM providers unavailable ({last_error})"
+                log.error("LLM judge disabled for this run: %s", self.disabled_reason)
+            return Judgment(False, error=last_error)
         try:
             data = normalize_judgment(extract_json(text))
         except (json.JSONDecodeError, ValueError, TypeError):

@@ -484,3 +484,54 @@ class ParkingAndJudgeRobustnessTests(unittest.TestCase):
         v = judge.judge(Job(source="t", company="A", title="Embedded Intern", url="https://x/5", external_id="5", description="fw"))
         self.assertTrue(v.ok, v.error)
         self.assertEqual(modes, ["json_schema", "json_object"])
+
+
+class FailoverTests(unittest.TestCase):
+    def test_quota_exhausted_provider_is_skipped_for_the_next_one(self):
+        import os
+        from hwintern.judge import LLMJudge, LLMConfig
+        from hwintern.models import Job
+        calls = []
+
+        class Sess:
+            def post(self, url, json=None, headers=None, timeout=None):
+                calls.append(url.split("/")[2])
+                if "googleapis" in url:
+                    return _HttpResp(429, {"error": {"message": "Quota exceeded for requests per day"}},
+                                     text='{"error":{"message":"Quota exceeded for quota metric: requests per day"}}')
+                return _HttpResp(200, {"choices": [{"message": {"content": json_dumps_judgment()}}], "model": "llama-3.3-70b-versatile"})
+        os.environ["GEMINI_API_KEY"] = "g"; os.environ["GROQ_API_KEY"] = "q"
+        try:
+            judge = LLMJudge(LLMConfig(enabled=True, providers=["gemini", "groq"]), http=Sess())
+            self.assertEqual(judge.describe(), "gemini / gemini-3.6-flash -> groq / llama-3.3-70b-versatile")
+            v = judge.judge(Job(source="t", company="A", title="Embedded Intern", url="https://x/1", external_id="1", description="d"))
+            self.assertTrue(v.ok, v.error)
+            self.assertEqual(v.data["model"], "llama-3.3-70b-versatile")
+            self.assertEqual(calls, ["generativelanguage.googleapis.com", "api.groq.com"])
+            v2 = judge.judge(Job(source="t", company="A", title="Embedded Intern 2", url="https://x/2", external_id="2", description="d"))
+            self.assertTrue(v2.ok)
+            self.assertEqual(calls[-1], "api.groq.com")          # gemini not retried this run
+            self.assertIn("skipped: quota exhausted", judge.describe())
+            self.assertTrue(judge.available)
+        finally:
+            os.environ.pop("GEMINI_API_KEY", None); os.environ.pop("GROQ_API_KEY", None)
+
+    def test_model_picked_from_provider_list_when_default_is_gone(self):
+        from hwintern.judge import LLMJudge, LLMConfig
+        from hwintern.models import Job
+        models_used = []
+
+        class Sess:
+            def get(self, url, headers=None, timeout=None):
+                return _HttpResp(200, {"data": [{"id": "whisper-large-v3"}, {"id": "llama-3.1-8b-instant"},
+                                                {"id": "meta-llama/llama-4-scout-17b-16e-instruct"}, {"id": "openai/gpt-oss-120b"}]})
+            def post(self, url, json=None, headers=None, timeout=None):
+                models_used.append(json["model"])
+                if json["model"] == "llama-3.3-70b-versatile":
+                    return _HttpResp(404, {"error": {"message": "The model `llama-3.3-70b-versatile` has been decommissioned"}},
+                                     text="The model `llama-3.3-70b-versatile` has been decommissioned and is no longer supported")
+                return _HttpResp(200, {"choices": [{"message": {"content": json_dumps_judgment()}}], "model": json["model"]})
+        judge = LLMJudge(LLMConfig(enabled=True, provider="groq", api_key="q"), http=Sess())
+        v = judge.judge(Job(source="t", company="A", title="Embedded Intern", url="https://x/3", external_id="3", description="d"))
+        self.assertTrue(v.ok, v.error)
+        self.assertEqual(models_used, ["llama-3.3-70b-versatile", "meta-llama/llama-4-scout-17b-16e-instruct"])
