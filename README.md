@@ -79,12 +79,30 @@ profile in `config.yaml` (`llm.profile`, written from the resume, edit it freely
 low hardware relevance drops the posting; otherwise the fit score (75%) plus the keyword score (25%)
 sets the tier, and the judge's one-line summary is shown in the notification.
 
-* Needs `ANTHROPIC_API_KEY` (console.anthropic.com → API keys) in `.env` or as a repository secret.
-  Without it the watcher silently falls back to keyword tiers and flags postings `llm-unjudged`.
-* Cost: roughly one to two cents per judged posting; judgments are cached so nothing is paid twice.
-  Expect a few dollars for the very first run and cents per day after that.
+* Works with any of the providers below. Set one key in `.env` (locally) or as a repository secret
+  (GitHub Actions); the first one found is used. Without any, the watcher falls back to keyword tiers
+  and flags postings `llm-unjudged`.
+* Judgments are cached so no posting is judged twice.
 * `python -m hwintern judge <posting URL>` shows the verdict for any single posting, handy for tuning
-  the profile text.
+  the profile text. `python -m hwintern test-notify` prints which provider/model is active.
+
+### Free LLM options
+
+| Provider | Key / setup | Notes |
+|---|---|---|
+| **Groq** (recommended free) | console.groq.com → API key → `GROQ_API_KEY` | Free tier, no card, very fast, Llama 3.3 70B. Plenty for a few hundred judgments a day. |
+| **Google Gemini** | aistudio.google.com → API key → `GEMINI_API_KEY` | Free tier (~1,500 requests/day), Gemini 2.5 Flash. |
+| **Cerebras** | cloud.cerebras.ai → `CEREBRAS_API_KEY` | Free tier, Llama 3.3 70B. |
+| **OpenRouter** | openrouter.ai → `OPENROUTER_API_KEY` | Uses `:free` models; small daily quota without credits. |
+| **Mistral** | console.mistral.ai → `MISTRAL_API_KEY` | Free "experiment" tier. |
+| **Ollama on your PC** | install from ollama.com, `ollama pull qwen2.5:7b`, run the watcher on that PC | 100% free and private; needs ~8 GB RAM for a 7B model. Only works when the watcher runs on the same machine (Docker/`--loop`), not from GitHub Actions. |
+| **Ollama on the GitHub runner** | set the repository *variable* `OLLAMA_MODEL` to `qwen2.5:3b` (or `llama3.2:3b`) | No key at all. The runner has no GPU, so a 3B model takes ~30-60 s per posting; fine inside the continuous loop, but judgments are noticeably weaker than the 70B options. |
+| Anthropic (paid) | `ANTHROPIC_API_KEY` | Best quality (`claude-opus-5`), about a cent or two per posting. |
+
+Model names drift; if a preset's default is retired, set `LLM_MODEL` (locally) or the repository
+variable `LLM_MODEL` to the provider's current model id. `LLM_PROVIDER` forces a provider when several
+keys are set, and `provider: openai_compatible` + `LLM_BASE_URL` + `LLM_MODEL` works for vLLM, LM Studio
+or any other OpenAI-style endpoint.
 
 ## Tiers: what buzzes your phone and what waits for the digest
 

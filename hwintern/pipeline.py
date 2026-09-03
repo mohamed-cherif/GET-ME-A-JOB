@@ -291,7 +291,7 @@ class Pipeline:
         def _judge(job):
             return job, judge.judge(job, job.score)
 
-        with ThreadPoolExecutor(max_workers=4) as ex:
+        with ThreadPoolExecutor(max_workers=max(1, int(self.cfg.llm.concurrency))) as ex:
             for job, verdict in ex.map(_judge, [j for (j, _, _) in accepted]):
                 if verdict.ok:
                     rep.llm_judged += 1

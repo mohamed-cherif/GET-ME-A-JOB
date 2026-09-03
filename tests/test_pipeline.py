@@ -301,3 +301,89 @@ class LLMJudgeTests(unittest.TestCase):
                          "Design power boards for satellites.")
         self.assertEqual(fetch_description(http, "https://jobs.lever.co/zoox/abc/apply"), "Firmware for sensors.")
         self.assertEqual(fetch_description(http, "https://careers.example.com/jobs/1"), "")
+
+
+class _HttpResp:
+    def __init__(self, status, data=None, text=""):
+        self.status_code, self._data, self.text, self.headers = status, data, text or json.dumps(data or {}), {}
+
+    def json(self):
+        return self._data
+
+
+class FreeProviderTests(unittest.TestCase):
+    def test_openai_compatible_backend_with_json_fences_and_drift(self):
+        import os
+        from hwintern.judge import LLMJudge, LLMConfig
+        calls = []
+
+        class Sess:
+            def post(self, url, json=None, headers=None, timeout=None):
+                calls.append((url, json, headers))
+                reply = "```json\n" + __import__("json").dumps({
+                    "is_internship": "yes", "role_family": "robotics_controls", "hardware_relevance": "88",
+                    "undergrad_eligible": True, "eligibility": "ok", "term": "Summer 2027", "fit_score": 81.0,
+                    "verdict": "GOOD", "summary": "Build drone flight controllers.", "reasons": "robotics"}) + "\n```"
+                return _HttpResp(200, {"choices": [{"message": {"content": reply}}], "model": "llama-3.3-70b-versatile"})
+        os.environ["GROQ_API_KEY"] = "gsk_test"
+        try:
+            judge = LLMJudge(LLMConfig(enabled=True, provider="auto", concurrency=1), http=Sess())
+            self.assertTrue(judge.available)
+            self.assertEqual(judge.describe(), "groq / llama-3.3-70b-versatile")
+            from hwintern.models import Job
+            job = Job(source="t", company="Skydio", title="Robotics Intern", url="https://x/1", external_id="1",
+                      description="Flight controller firmware for drones.")
+            v = judge.judge(job)
+            self.assertTrue(v.ok, v.error)
+            self.assertEqual(v.data["verdict"], "good")
+            self.assertEqual(v.data["hardware_relevance"], 88)
+            self.assertIs(v.data["is_internship"], True)
+            url, payload, headers = calls[0]
+            self.assertEqual(url, "https://api.groq.com/openai/v1/chat/completions")
+            self.assertEqual(headers["Authorization"], "Bearer gsk_test")
+            self.assertEqual(payload["response_format"], {"type": "json_object"})
+            self.assertIn("Skydio", payload["messages"][1]["content"])
+        finally:
+            os.environ.pop("GROQ_API_KEY", None)
+
+    def test_json_mode_fallback_and_auth_error(self):
+        import os
+        from hwintern.judge import LLMJudge, LLMConfig, JudgeError
+        from hwintern.models import Job
+        state = {"n": 0}
+
+        class Sess:
+            def post(self, url, json=None, headers=None, timeout=None):
+                state["n"] += 1
+                if "response_format" in (json or {}):
+                    return _HttpResp(400, {"error": "response_format not supported"}, text="response_format not supported")
+                return _HttpResp(200, {"choices": [{"message": {"content": '{"fit_score": 30, "verdict": "reject", "is_internship": true, "hardware_relevance": 10, "undergrad_eligible": true, "eligibility": "ok", "term": "?", "summary": "s", "reasons": "r", "role_family": "software_only"}'}}]})
+        os.environ["OLLAMA_HOST"] = "http://localhost:11434"
+        try:
+            judge = LLMJudge(LLMConfig(enabled=True, provider="ollama", model="qwen2.5:7b"), http=Sess())
+            job = Job(source="t", company="A", title="Web Intern", url="https://x/2", external_id="2", description="React.")
+            v = judge.judge(job)
+            self.assertTrue(v.ok)
+            self.assertEqual(v.data["verdict"], "reject")
+            self.assertEqual(state["n"], 2)   # retried once without JSON mode
+        finally:
+            os.environ.pop("OLLAMA_HOST", None)
+
+        class Bad:
+            def post(self, url, json=None, headers=None, timeout=None):
+                return _HttpResp(401, {"error": "invalid api key"}, text="invalid api key")
+        judge = LLMJudge(LLMConfig(enabled=True, provider="groq", api_key="bad"), http=Bad())
+        v = judge.judge(Job(source="t", company="A", title="x", url="https://x/3", external_id="3"))
+        self.assertFalse(v.ok)
+        self.assertFalse(judge.available)
+        self.assertIn("rejected", judge.disabled_reason)
+
+    def test_no_credentials_means_unavailable(self):
+        import os
+        from hwintern.judge import LLMJudge, LLMConfig
+        for k in ("ANTHROPIC_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY",
+                  "MISTRAL_API_KEY", "OLLAMA_HOST"):
+            os.environ.pop(k, None)
+        judge = LLMJudge(LLMConfig(enabled=True, provider="auto"))
+        self.assertFalse(judge.available)
+        self.assertIn("no LLM credentials", judge.disabled_reason)

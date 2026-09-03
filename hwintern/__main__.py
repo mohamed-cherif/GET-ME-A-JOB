@@ -40,6 +40,8 @@ def cmd_test_notify(args, cfg):
     if not ns:
         print("no notifiers configured (check config.yaml and env vars)", file=sys.stderr)
         return 1
+    from .judge import LLMJudge
+    print(f"llm judge: {LLMJudge(cfg.llm).describe()}")
     for n in ns:
         try:
             if hasattr(n, "diagnose"):
@@ -65,6 +67,7 @@ def cmd_judge(args, cfg):
     if not judge.available:
         print(f"LLM judge unavailable: {judge.disabled_reason}", file=sys.stderr)
         return 1
+    print(f"judge: {judge.describe()}")
     v = judge.judge(job)
     if not v.ok:
         print(f"no judgment: {v.error}", file=sys.stderr)

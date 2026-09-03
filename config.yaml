@@ -69,8 +69,16 @@ filters:
 # key the watcher falls back to keyword tiers. Judgments are cached, so each posting is paid for once.
 llm:
   enabled: true
-  model: claude-opus-5
-  effort: low
+  # Provider is picked automatically from whichever key exists in .env / secrets, in this order:
+  # ANTHROPIC_API_KEY, GROQ_API_KEY (free tier), GEMINI_API_KEY (free tier), CEREBRAS_API_KEY (free tier),
+  # OPENROUTER_API_KEY (":free" models), MISTRAL_API_KEY (free tier), or a local Ollama server.
+  # Force one with LLM_PROVIDER; override the model with LLM_MODEL (see README "Free LLM options").
+  provider: ${LLM_PROVIDER:-auto}
+  model: ${LLM_MODEL:-}
+  base_url: ${LLM_BASE_URL:-}     # only for provider: openai_compatible (vLLM, LM Studio, ...)
+  api_key: ${LLM_API_KEY:-}
+  effort: low                      # Anthropic only
+  concurrency: 2                   # parallel judge calls; free tiers throttle, keep this small
   max_calls_per_cycle: 120
   min_relevance: 40            # hardware_relevance (0-100) below this -> rejected
   keyword_weight: 0.25         # final score = 75% LLM fit + 25% keyword score

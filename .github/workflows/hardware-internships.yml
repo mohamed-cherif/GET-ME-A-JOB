@@ -5,8 +5,9 @@
 # of seen postings to the Actions cache, and then dispatches the next run of itself. An hourly cron
 # only acts as a watchdog that restarts the chain if a run ever dies.
 #
-# Secrets (Settings -> Secrets and variables -> Actions): TELEGRAM_BOT_TOKEN (or another channel),
-# ANTHROPIC_API_KEY for the LLM judge.
+# Secrets (Settings -> Secrets and variables -> Actions): TELEGRAM_BOT_TOKEN (or another channel), and one
+# LLM key for the judge: GROQ_API_KEY (free), GEMINI_API_KEY (free), ANTHROPIC_API_KEY, ... Or set the
+# repository *variable* OLLAMA_MODEL (e.g. qwen2.5:3b) to run a small open model on the runner itself.
 name: hardware-internships-watch
 
 on:
@@ -64,9 +65,25 @@ jobs:
             exit 1
           fi
 
+      - name: Start a local Ollama model (only when the OLLAMA_MODEL variable is set)
+        if: vars.OLLAMA_MODEL != ''
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          (ollama serve > /tmp/ollama.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/tags >/dev/null && break; sleep 1; done
+          ollama pull "${{ vars.OLLAMA_MODEL }}"
+
       - name: Watch (continuous loop, ~5.5h)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+          LLM_MODEL: ${{ vars.LLM_MODEL || vars.OLLAMA_MODEL }}
+          OLLAMA_HOST: ${{ vars.OLLAMA_MODEL != '' && 'http://localhost:11434' || '' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
