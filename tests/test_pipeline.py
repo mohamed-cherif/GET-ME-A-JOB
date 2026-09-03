@@ -341,7 +341,7 @@ class FreeProviderTests(unittest.TestCase):
             url, payload, headers = calls[0]
             self.assertEqual(url, "https://api.groq.com/openai/v1/chat/completions")
             self.assertEqual(headers["Authorization"], "Bearer gsk_test")
-            self.assertEqual(payload["response_format"], {"type": "json_object"})
+            self.assertEqual(payload["response_format"]["type"], "json_schema")
             self.assertIn("Skydio", payload["messages"][1]["content"])
         finally:
             os.environ.pop("GROQ_API_KEY", None)
@@ -365,7 +365,7 @@ class FreeProviderTests(unittest.TestCase):
             v = judge.judge(job)
             self.assertTrue(v.ok)
             self.assertEqual(v.data["verdict"], "reject")
-            self.assertEqual(state["n"], 2)   # retried once without JSON mode
+            self.assertEqual(state["n"], 3)   # json_schema -> json_object -> plain prompt
         finally:
             os.environ.pop("OLLAMA_HOST", None)
 

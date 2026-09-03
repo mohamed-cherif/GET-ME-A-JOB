@@ -100,7 +100,7 @@ class Pipeline:
         key = f"fail:{src.kind}:{src.ident}"
         n = self._failures(src)
         limit = int(self.cfg.run.max_board_failures)
-        if limit and n >= limit and (n - limit) % 50 != 0:
+        if limit and n >= limit and (n - limit + 1) % 50 != 0:
             # dead board: skip it, but retry once every 50 cycles in case it came back
             self.store.set(key, str(n + 1))
             return src, [], None

@@ -236,10 +236,11 @@ def normalize_judgment(d: dict) -> dict:
              "weak": 40, "none": 0, "very low": 10}
     for k in ("hardware_relevance", "fit_score"):
         v = out.get(k, 0)
+        sv = str(v).strip().rstrip("%").strip()
         try:
-            out[k] = max(0, min(100, int(float(v))))
+            out[k] = max(0, min(100, int(float(sv))))
         except (TypeError, ValueError):
-            out[k] = words.get(str(v).strip().lower().rstrip("%"), 50)
+            out[k] = words.get(sv.lower(), 50)
     out["role_family"] = str(out.get("role_family") or "other").strip().lower().replace(" ", "_").replace("/", "_")
     out["eligibility"] = str(out.get("eligibility") or "unclear").strip().lower()
     for k in ("is_internship", "undergrad_eligible"):
