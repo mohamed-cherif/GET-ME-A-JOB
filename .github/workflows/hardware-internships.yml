@@ -49,6 +49,20 @@ jobs:
           restore-keys: |
             hwintern-state-
 
+      - name: Check that a notification channel is configured
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          GENERIC_WEBHOOK_URL: ${{ secrets.GENERIC_WEBHOOK_URL }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN$DISCORD_WEBHOOK_URL$NTFY_TOPIC$SLACK_WEBHOOK_URL$NOTIFY_EMAIL$GENERIC_WEBHOOK_URL" ]; then
+            echo "::error::No notification secret is set (e.g. TELEGRAM_BOT_TOKEN). Add one under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
       - name: Poll boards
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

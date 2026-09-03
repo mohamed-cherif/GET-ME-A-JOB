@@ -88,6 +88,21 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(rep.jobs_matched, 1)
             self.assertEqual(cap.batches, [])
 
+    def test_first_run_refuses_without_real_channel(self):
+        from hwintern.notify import StdoutNotifier
+        with tempfile.TemporaryDirectory() as tmp:
+            http = FakeHttp({"boards-api.greenhouse.io/v1/boards/acme/jobs": GH})
+            cfg = make_cfg(tmp, [{"kind": "greenhouse", "id": "acme", "company": "Acme"}])
+            p = Pipeline(cfg, http=http, notifiers=[StdoutNotifier({}, http)])
+            rep = p.run_once()
+            self.assertIn("config", rep.errors)
+            self.assertTrue(p.store.is_first_run())          # baseline NOT built
+            self.assertEqual(p.store.stats()["jobs_seen"], 0)
+            # once a real channel exists the same run proceeds normally
+            cap = CaptureNotifier()
+            rep = Pipeline(cfg, http=http, notifiers=[cap]).run_once()
+            self.assertEqual(len(rep.notified), 1)
+
     def test_notifier_failure_does_not_crash(self):
         class Boom(Notifier):
             name = "boom"

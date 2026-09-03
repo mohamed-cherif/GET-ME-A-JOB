@@ -99,6 +99,15 @@ class Pipeline:
         t0 = time.time()
         rep = CycleReport(started=datetime.now(timezone.utc))
         first_run = self.store.is_first_run()
+        real_channels = [n for n in self.notifiers if n.name not in ("stdout", "file")]
+        if first_run and not self.dry_run and not real_channels:
+            # Building the baseline now would mark every open posting as "seen" and the user would
+            # never be told about it once a channel is configured. Refuse until one exists.
+            log.error("no notification channel configured (Telegram/Discord/ntfy/...); refusing to build the "
+                      "baseline on the first run. Set a channel or use --dry-run.")
+            rep.errors["config"] = "no notification channel configured"
+            rep.duration_s = time.time() - t0
+            return rep
         sources = self.sources()
         rep.sources_total = len(sources)
         log.info("cycle start: %d sources (%s)", len(sources), "first run - building baseline" if first_run else "incremental")
