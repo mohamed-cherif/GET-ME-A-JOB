@@ -1,0 +1,19 @@
+# systemd unit for a VPS / Raspberry Pi / always-on laptop.
+#   sudo cp deploy/hw-internships-watcher.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now hw-internships-watcher
+[Unit]
+Description=24/7 hardware internship watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/opt/hardware-internships-scraper
+EnvironmentFile=/opt/hardware-internships-scraper/.env
+ExecStart=/usr/bin/python3 -m hwintern run --loop
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

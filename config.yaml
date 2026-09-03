@@ -1,0 +1,96 @@
+# ---------------------------------------------------------------------------
+# hardware-internships watcher configuration
+# Values like ${DISCORD_WEBHOOK_URL} are read from environment variables
+# (or a .env file if you use docker compose). ${VAR:-default} syntax works too.
+# ---------------------------------------------------------------------------
+
+run:
+  interval_minutes: 5          # how often to poll every board when running with --loop
+  jitter_seconds: 20
+  workers: 12                  # parallel HTTP workers
+  request_timeout: 30
+  detail_fetch_limit: 150      # per cycle: extra per-posting requests (Workday/SmartRecruiters/Oracle descriptions)
+  initial_max_age_days: 45     # first run only: don't notify about postings older than this (null = notify everything)
+  auto_discover: true          # add boards discovered through the community feeds automatically
+  log_level: INFO
+  state_dir: state             # sqlite db + NEW_JOBS.md live here
+
+filters:
+  # Summer 2027 is the primary target. Other seasons are kept too (flagged "other-term" and listed
+  # after the Summer matches); the seasons below are already over and are dropped.
+  target_terms: ["Summer 2027"]
+  also_accept_terms: []
+  accept_other_terms: true
+  reject_terms: ["Spring 2026", "Summer 2026", "Winter 2026"]
+  reject_years: [2023, 2024, 2025]
+  accept_unknown_term: true
+
+  # Hardware taxonomy groups (see hwintern/filters.py for the keyword lists). Remove any you don't want.
+  categories: [electrical, hardware, embedded, silicon, analog_rf, robotics_controls, mechanical, test_validation]
+  extra_keywords: ["\\bcomputer vision\\b", "\\bperception\\b", "\\bedge (?:ai|ml)\\b", "\\btinyml\\b", "\\bwearable\\b"]
+  match_description: true
+  min_description_hits: 2
+  require_internship: true
+
+  # Titles hitting these get a ⭐, are sent first, and use "urgent" priority on ntfy.
+  priority_keywords: ["robot", "mechatronic", "avionic", "drone", "\\bUAV\\b", "\\bUAS\\b", "eVTOL", "aircraft",
+                      "flight", "maritime", "naval", "\\bships?\\b", "marine", "underwater", "subsea", "\\b[AU]UV\\b",
+                      "\\bUSV\\b", "\\bROV\\b", "autonom", "\\bGN&?C\\b", "satellite", "spacecraft", "rocket",
+                      "exoskeleton", "humanoid", "manipulat", "embedded", "firmware", "control", "perception",
+                      "computer vision", "\\bPCB\\b", "electrical"]
+
+  # Location filtering (regexes against the location string). Empty = anywhere (US, Canada, Europe...).
+  location_include: []
+  location_exclude: []
+  exclude_companies: ["\\bUniversity\\b", "\\bCollege\\b"]   # regexes on the company name
+
+  # Eligibility. No citizenship / green card -> drop anything that requires them (or a clearance / ITAR
+  # "US person"). "no-sponsorship" postings are KEPT and flagged: an internship on CPT does not need
+  # sponsorship. PhD-titled roles are dropped; "graduate students only" wording is flagged.
+  exclude_sponsorship: ["U.S. Citizenship is Required"]
+  exclude_flags: ["citizenship-required", "phd-title"]
+
+# Where notifications go. Every enabled channel receives every new posting.
+notifiers:
+  - type: stdout
+  - type: file                 # appends to state/NEW_JOBS.md and state/new_jobs.jsonl
+    path: state
+  - type: discord
+    enabled: true
+    webhook_url: ${DISCORD_WEBHOOK_URL}
+    mention: ${DISCORD_MENTION:-}        # e.g. "@everyone" or "<@123456789>"
+  - type: telegram
+    enabled: true
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    chat_id: ${TELEGRAM_CHAT_ID}
+  - type: ntfy                 # phone push with zero signup: install the ntfy app, subscribe to your topic
+    enabled: true
+    topic: ${NTFY_TOPIC}
+    server: ${NTFY_SERVER:-https://ntfy.sh}
+    token: ${NTFY_TOKEN:-}
+    priority: high
+  - type: slack
+    enabled: true
+    webhook_url: ${SLACK_WEBHOOK_URL}
+  - type: email
+    enabled: true
+    smtp_host: ${SMTP_HOST:-smtp.gmail.com}
+    smtp_port: ${SMTP_PORT:-587}
+    username: ${SMTP_USERNAME}
+    password: ${SMTP_PASSWORD}
+    to_addr: ${NOTIFY_EMAIL}
+  - type: webhook
+    enabled: true
+    url: ${GENERIC_WEBHOOK_URL}
+
+# Community-maintained internship feeds (refreshed many times per day). They cover career sites we do
+# not poll directly, and every hardware hit seeds automatic board discovery.
+aggregators:
+  - kind: listings-json
+    name: simplify-summer2027
+    url: https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/.github/scripts/listings.json
+  - kind: listings-json
+    name: vanshb03-summer2027
+    url: https://raw.githubusercontent.com/vanshb03/Summer2027-Internships/dev/.github/scripts/listings.json
+
+companies_file: companies.yaml

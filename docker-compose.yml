@@ -1,0 +1,14 @@
+# docker compose up -d      -> runs 24/7, restarts on crash/reboot, state persisted in ./state
+services:
+  watcher:
+    build: .
+    container_name: hw-internships-watcher
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./state:/app/state
+      - ./config.yaml:/app/config.yaml:ro
+      - ./companies.yaml:/app/companies.yaml:ro
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
